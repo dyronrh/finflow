@@ -1,0 +1,58 @@
+[project]
+name = "quant-portfolio-intelligence"
+version = "0.1.0"
+description = "Multifactor ranking, portfolio construction and point-in-time backtesting for US equities."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pandas-stubs",
+    "types-PyYAML",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "packages/quant_core",
+    "packages/data_platform",
+    "packages/backtesting",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["packages", "."]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["packages", "apps", "pipelines", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["quant_core", "data_platform", "backtesting", "apps"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "packages"
+ignore_missing_imports = true

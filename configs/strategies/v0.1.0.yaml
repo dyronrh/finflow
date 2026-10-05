@@ -1,0 +1,51 @@
+# Strategy v0.1.0 — long-only multifactor (README §8–§11).
+# Any change here requires a new strategy_version, a reproducible backtest
+# and human review (README §8.3).
+strategy_version: v0.1.0
+
+composite_weights:
+  value: 0.25
+  growth: 0.15
+  profitability: 0.25
+  momentum: 0.20
+  revisions: 0.15
+
+normalization:
+  lower_quantile: 0.01
+  upper_quantile: 0.99
+  min_group_size: 5
+  min_family_coverage: 0.5
+  min_composite_coverage: 0.7
+
+eligibility:
+  minimum_stock_price_usd: 5
+  min_market_cap_usd: 2000000000
+  min_adv_usd: 5000000
+  max_volatility_percentile: 0.95
+
+signals:
+  strong_long_composite_percentile: 0.95
+  long_composite_percentile: 0.85
+  long_min_profitability_percentile: 0.60
+  long_min_momentum_percentile: 0.50
+  long_min_revisions_percentile: 0.50
+  long_min_liquidity_percentile: 0.60
+  watch_composite_percentile: 0.70
+  reduce_composite_percentile: 0.55
+  reduce_revisions_percentile: 0.30
+  avoid_composite_percentile: 0.20
+
+portfolio:
+  weighting: inverse_volatility
+  max_position_weight: 0.08
+  max_sector_weight: 0.25
+  min_holdings: 20
+  max_holdings: 35
+  max_turnover_per_rebalance: 0.25
+  trade_band: 0.005
+  rebalance_frequency: monthly
+
+costs:
+  commission_bps: 1
+  half_spread_bps: 2
+  slippage_bps: 5
