@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 
 from _common import ROOT, add_source_args, load_source
 
@@ -39,7 +40,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_strategy_config(args.config) if args.config else default_strategy_config()
-    market = load_source(args, "2016-01-01", "2026-12-31")
+    market = load_source(args, "2016-01-01", date.today().isoformat())
     service = ResearchService(market, config)
     as_of = service.resolve_as_of(args.as_of)
     signals = service.signals(as_of)

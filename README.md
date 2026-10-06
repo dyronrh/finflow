@@ -11,7 +11,7 @@ Plataforma cuantitativa para analizar acciones, generar rankings multifactoriale
 
 ## 0. Estado actual del repositorio y quickstart
 
-Implementado (núcleo del MVP, Sprints 2–5):
+Implementado (Sprints 2–8; ver estado por sprint abajo):
 
 | Módulo | Contenido |
 |---|---|
@@ -24,6 +24,33 @@ Implementado (núcleo del MVP, Sprints 2–5):
 | `packages/backtesting/` | Backtester event-driven: señal al cierre `t`, fill a la apertura `t+1`, costes, benchmarks (equal-weight y SPY), métricas, metadata reproducible; ajuste walk-forward con holdout e IC de factores |
 | `apps/api/` | FastAPI: `GET /v1/rankings`, `GET /v1/securities/{id}/analysis`, `POST /v1/portfolios/{id}/rebalance/proposal` (solo propuesta, `PENDING_APPROVAL`) |
 | `tests/` | Normalización, scoring, reglas de señales, leakage point-in-time, límites de cartera, no same-bar execution, determinismo, API |
+
+**Sprints 6–8 (implementados):**
+
+- **Risk engine** (`packages/quant_core/risk/`):
+  - Mide: covarianza Ledoit-Wolf, volatilidad ex-ante, VaR/CVaR 95% (paramétrico e histórico), beta contra SPY, exposición por sector e industria y contribución de cada acción al riesgo.
+  - Límites: industria, contribución individual al riesgo, volatilidad, VaR y beta. En **v0.1.0** solo generan alertas; en **v0.2.0** (`configs/strategies/v0.2.0.yaml`) son restricciones activas: topes, recorte por presupuesto de riesgo y reducción de exposición, con un piso mínimo.
+  - Alertas: límites violados, posiciones degradadas o que salen del universo, caídas de score y drawdown.
+  - API: `POST /v1/portfolios/{id}/risk`, y la propuesta de rebalanceo incluye `risk_before`/`risk_after`.
+- **ML** (`packages/ml/`, `make train-ml-real`):
+  - Panel point-in-time con *purging*: un modelo solo ve retornos ya conocidos en la fecha de decisión.
+  - Ridge y gradient boosting, entrenados en walk-forward.
+  - El score de ML pasa por las mismas reglas duras (elegibilidad, riesgo, límites).
+  - Comparación de IC y backtest contra la estrategia explicable, importancia por permutación y drift (PSI, cobertura, caída del IC).
+  - Registro de modelos: entran como `PENDING_REVIEW` y no se pueden usar sin aprobación (`pipelines/model_registry.py`).
+- **Paper trading** (`packages/paper_trading/`, `pipelines/paper_trade.py`):
+  - Flujo: propuesta → aprobación con rol `approver` → ejecución → sincronización → reconciliación.
+  - Ledger SQLite con auditoría de solo-escritura.
+  - Controles: kill switch (variables de entorno + archivo de emergencia, revisado antes de cada orden), datos frescos, tamaño máximo por orden, vencimiento de propuestas y aprobaciones, regla opcional de cuatro ojos.
+  - Brokers: simulado local o Alpaca **paper**. El live trading está bloqueado por código.
+
+```bash
+python pipelines/paper_trade.py propose --by analista
+python pipelines/paper_trade.py approve <id> --by jefe --role approver
+GLOBAL_TRADING_ENABLED=true python pipelines/paper_trade.py execute <id> --by pm
+python pipelines/paper_trade.py reconcile
+python pipelines/paper_trade.py kill --reason "..."     # parada de emergencia
+```
 
 **Datos.** Hay dos fuentes:
 
@@ -75,7 +102,7 @@ El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como 
 - **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A). Bancos y aseguradoras quedan con cobertura parcial.
 - **Cambio de configuración:** el walk-forward no cobra el coste de cambiar de configuración entre ventanas.
 
-Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), PostgreSQL/DuckDB/MinIO, Docker Compose, frontend Next.js, risk engine (VaR/CVaR, beta, alertas), walk-forward, optimización convexa, paper trading.
+Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), dashboard (Streamlit/Next.js), PostgreSQL/DuckDB/MinIO + Docker Compose, orquestación diaria (Prefect), reportes HTML y una señal con ventaja demostrada fuera de muestra antes de cualquier uso con capital.
 
 ---
 

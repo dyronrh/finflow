@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile
 
 install:
 	uv sync
@@ -49,3 +49,13 @@ train-ml-real:
 
 models:
 	uv run python pipelines/model_registry.py list
+
+paper-status:
+	uv run --extra real-data python pipelines/paper_trade.py status
+
+paper-propose:
+	uv run --extra real-data python pipelines/paper_trade.py propose
+
+paper-reconcile:
+	uv run --extra real-data python pipelines/paper_trade.py sync && \
+	uv run --extra real-data python pipelines/paper_trade.py reconcile
