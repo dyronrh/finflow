@@ -173,3 +173,66 @@ def test_yahoo_helpers():
     assert split_factor_after(splits, "A", pd.Timestamp("2019-01-01")) == 40.0
     assert split_factor_after(splits, "A", pd.Timestamp("2021-01-01")) == 10.0
     assert split_factor_after(splits, "B", pd.Timestamp("2021-01-01")) == 1.0
+
+
+def _constituents():
+    return pd.DataFrame(
+        {
+            "Symbol": ["AAA"],
+            "Security": ["A"],
+            "GICS Sector": ["Energy"],
+            "GICS Sub-Industry": ["Oil"],
+        }
+    )
+
+
+def test_select_tables_by_content_not_position():
+    notice = pd.DataFrame({"Note": ["page banner"]})
+    changes = pd.DataFrame(
+        {"Date": ["2024-01-02"], "Added": ["AAA"], "Removed": ["ZZZ"], "Reason": ["x"]}
+    )
+    cons, chg = sp500.select_tables([notice, _constituents(), pd.DataFrame({"x": [1]}), changes])
+    assert list(cons["Symbol"]) == ["AAA"]
+    assert chg is changes
+
+
+def test_select_tables_without_change_log():
+    _, chg = sp500.select_tables([_constituents()])
+    assert chg is None
+
+
+def test_select_tables_raises_with_context_when_constituents_missing():
+    with pytest.raises(ValueError, match="tables seen"):
+        sp500.select_tables([pd.DataFrame({"x": [1]})])
+
+
+def test_parse_changes_unnamed_date_column_and_footnotes():
+    table = pd.DataFrame(
+        [["July 22, 2025[5]", "ABC[a]", "Abc", "OLD", "Old", "r"], ["", "", "", "", "", ""]],
+        columns=pd.MultiIndex.from_tuples(
+            [
+                ("Unnamed: 0_level_0", "Unnamed: 0_level_1"),
+                ("Added", "Symbol"),
+                ("Added", "Security"),
+                ("Removed", "Symbol"),
+                ("Removed", "Security"),
+                ("Reason", "Reason"),
+            ]
+        ),
+    )
+    out = sp500.parse_changes(table)
+    assert len(out) == 1
+    assert out.iloc[0]["date"] == pd.Timestamp("2025-07-22")
+    assert out.iloc[0]["added"] == "ABC" and out.iloc[0]["removed"] == "OLD"
+
+
+def test_parse_changes_error_lists_columns():
+    with pytest.raises(ValueError, match="not found in"):
+        sp500.parse_changes(pd.DataFrame({"Date": ["2024-01-01"], "Foo": ["x"]}))
+
+
+def test_membership_with_empty_change_log_keeps_current_members():
+    empty = pd.DataFrame(columns=["date", "added", "removed"])
+    m = sp500.membership_intervals(["A", "B"], empty)
+    assert set(m["security_id"]) == {"A", "B"}
+    assert m["start"].isna().all() and m["end"].isna().all()

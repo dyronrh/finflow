@@ -42,7 +42,17 @@ def fetch_real_market(
 
     constituents_table, changes_table = sp500.fetch_tables(user_agent)
     current = sp500.parse_constituents(constituents_table)
-    changes = sp500.parse_changes(changes_table)
+    universe_note = "approximate point-in-time membership from the Wikipedia change log"
+    try:
+        if changes_table is None:
+            raise ValueError("change-log table not found on the Wikipedia page")
+        changes = sp500.parse_changes(changes_table)
+        if changes.empty:
+            raise ValueError("change-log table parsed to zero dated rows")
+    except ValueError as exc:
+        log.warning("S&P 500 change log unusable (%s); using current members only", exc)
+        changes = pd.DataFrame(columns=["date", "added", "removed"])
+        universe_note = f"current members only ({exc}): strong survivorship bias"
     membership = sp500.membership_intervals(current["security_id"].tolist(), changes)
     membership = membership[(membership["end"].isna()) | (membership["end"] > pd.Timestamp(start))]
 
@@ -111,6 +121,8 @@ def fetch_real_market(
             "survivorship_bias": (
                 "partial: removed S&P 500 members without Yahoo history are missing"
             ),
+            "universe": universe_note,
+            "change_log_rows": len(changes),
             "tickers_requested": len(tickers),
             "tickers_without_prices": prices.failed,
             "tickers_without_sec_facts": no_facts,

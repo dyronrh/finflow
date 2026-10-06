@@ -20,12 +20,37 @@ import pandas as pd
 WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 
-def fetch_tables(user_agent: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def fetch_tables(user_agent: str) -> tuple[pd.DataFrame, pd.DataFrame | None]:
     import requests
 
-    html = requests.get(WIKI_URL, headers={"User-Agent": user_agent}, timeout=60).text
-    tables = pd.read_html(StringIO(html))
-    return tables[0], tables[1]
+    response = requests.get(WIKI_URL, headers={"User-Agent": user_agent}, timeout=60)
+    response.raise_for_status()
+    return select_tables(pd.read_html(StringIO(response.text)))
+
+
+def _flat_columns(table: pd.DataFrame) -> list[str]:
+    if isinstance(table.columns, pd.MultiIndex):
+        return [" ".join(dict.fromkeys(str(p) for p in col)).strip() for col in table.columns]
+    return [str(c).strip() for c in table.columns]
+
+
+def select_tables(tables: list[pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Find the constituents and change-log tables by their columns, not position.
+
+    The page layout changes over time (extra tables, renamed headers), so the
+    change log is the table whose headers mention both "added" and "removed".
+    """
+    constituents = changes = None
+    for table in tables:
+        cols = " | ".join(_flat_columns(table)).lower()
+        if constituents is None and "symbol" in cols and "gics sector" in cols:
+            constituents = table
+        elif changes is None and "added" in cols and "removed" in cols:
+            changes = table
+    if constituents is None:
+        found = [_flat_columns(t)[:6] for t in tables]
+        raise ValueError(f"S&P 500 constituents table not found; tables seen: {found}")
+    return constituents, changes
 
 
 def snake(text: str) -> str:
@@ -50,27 +75,37 @@ def parse_constituents(table: pd.DataFrame) -> pd.DataFrame:
 def parse_changes(table: pd.DataFrame) -> pd.DataFrame:
     """Normalise the change log to: date, added, removed (Yahoo-style tickers)."""
     df = table.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [" ".join(dict.fromkeys(str(p) for p in col)).strip() for col in df.columns]
+    df.columns = _flat_columns(df)
     cols = {c.lower(): c for c in df.columns}
 
-    def pick(*needles: str) -> str:
-        for lower, original in cols.items():
-            if all(n in lower for n in needles):
-                return original
-        raise KeyError(needles)
+    def pick(*options: tuple[str, ...]) -> str:
+        for needles in options:
+            for lower, original in cols.items():
+                if all(n in lower for n in needles):
+                    return original
+        raise ValueError(f"change-log column {options} not found in {list(df.columns)}")
+
+    date_col = (
+        pick(("date",)) if any("date" in c for c in cols) else df.columns[0]
+    )  # first column holds the effective date when the header is unnamed
+    added_col = pick(("added", "ticker"), ("added", "symbol"))
+    removed_col = pick(("removed", "ticker"), ("removed", "symbol"))
 
     def clean(value: object) -> str | None:
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return None
-        text = str(value).strip().upper().replace(".", "-")
+        text = re.sub(r"\[.*?\]", "", str(value)).strip().upper().replace(".", "-")
         return text or None
 
     out = pd.DataFrame(
         {
-            "date": pd.to_datetime(df[pick("date")], errors="coerce"),
-            "added": df[pick("added", "ticker")].map(clean),
-            "removed": df[pick("removed", "ticker")].map(clean),
+            "date": pd.to_datetime(
+                df[date_col].astype(str).str.replace(r"\[.*?\]", "", regex=True).str.strip(),
+                errors="coerce",
+                format="mixed",
+            ),
+            "added": df[added_col].map(clean),
+            "removed": df[removed_col].map(clean),
         }
     )
     return out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)

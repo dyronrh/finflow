@@ -39,6 +39,7 @@ def main() -> None:
         f"fundamental rows: {len(f)}; median filing lag: "
         f"{(f['available_at'] - f['event_time']).dt.days.median():.0f} days"
     )
+    print(f"universe: {market.metadata['universe']} ({market.metadata['change_log_rows']} changes)")
     print(f"without prices (likely delisted): {len(market.metadata['tickers_without_prices'])}")
     print(f"without SEC facts: {len(market.metadata['tickers_without_sec_facts'])}")
 
