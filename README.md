@@ -102,7 +102,7 @@ El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como 
 - **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A). Bancos y aseguradoras quedan con cobertura parcial.
 - **Cambio de configuración:** el walk-forward no cobra el coste de cambiar de configuración entre ventanas.
 
-Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), dashboard (Streamlit/Next.js), PostgreSQL/DuckDB/MinIO + Docker Compose, orquestación diaria (Prefect), reportes HTML y una señal con ventaja demostrada fuera de muestra antes de cualquier uso con capital.
+Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), dashboard (Streamlit/Next.js), PostgreSQL/DuckDB/MinIO + Docker Compose, orquestación diaria (Prefect), reportes HTML, optimización convexa (CVXPY) y una señal con ventaja demostrada fuera de muestra antes de cualquier uso con capital.
 
 ---
 
