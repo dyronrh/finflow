@@ -37,12 +37,26 @@ def load_source(args, start: str, end: str) -> MarketData:
     return market
 
 
+def _from_dotenv(name: str) -> str:
+    """Read ``name`` from the repo's .env (gitignored) without extra dependencies."""
+    path = ROOT / ".env"
+    if not path.exists():
+        return ""
+    for line in path.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == name:
+            return value.strip().strip("'\"")
+    return ""
+
+
 def sec_user_agent() -> str:
-    agent = os.environ.get("SEC_USER_AGENT", "")
+    agent = os.environ.get("SEC_USER_AGENT", "") or _from_dotenv("SEC_USER_AGENT")
     if not agent:
         raise SystemExit(
-            "Set SEC_USER_AGENT with a contact e-mail, e.g.\n"
+            "Set SEC_USER_AGENT with a contact e-mail (required by the SEC fair-access\n"
+            "policy), either for this shell:\n"
             "  export SEC_USER_AGENT='finflow research you@example.com'\n"
-            "(required by the SEC fair-access policy)."
+            "or once and for all in the repo's .env file (not committed):\n"
+            "  echo \"SEC_USER_AGENT='finflow research you@example.com'\" >> .env"
         )
     return agent
