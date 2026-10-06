@@ -32,7 +32,7 @@ Implementado (núcleo del MVP, Sprints 2–5):
 
 | Dato | Fuente | Point-in-time |
 |---|---|---|
-| Precios diarios (ajustados por splits y dividendos) y SPY | Yahoo Finance (`yfinance`) | Sí: se usa el cierre de `t` y se ejecuta en la apertura de `t+1` |
+| Precios diarios y SPY | Yahoo Finance (`yfinance`) | Sí: se usa el cierre de `t` y se ejecuta en la apertura de `t+1`. Los retornos usan precios ajustados por dividendos; market cap, ADV y filtro de precio usan el precio negociado (ajustado solo por splits), porque el ajuste por dividendos incorpora dividendos futuros |
 | Fundamentales trimestrales y acciones en circulación | SEC EDGAR XBRL (`companyfacts`) | Sí: `available_at` = fecha de filing; se conserva el **primer** valor publicado, nunca reexpresiones |
 | Universo y sector | S&P 500 en Wikipedia (miembros actuales + historial de altas/bajas) | Aproximado (ver limitaciones) |
 | Estimaciones de analistas | — | No hay fuente gratuita PIT: el factor *revisions* queda desactivado y su peso se redistribuye |
@@ -45,6 +45,7 @@ export SEC_USER_AGENT="finflow research tu-email@ejemplo.com"   # exigido por la
 make fetch-data          # descarga y cachea en data/local_dev_only/real/ (~30–60 min la primera vez)
 make backtest-real       # backtest v0.1.0 sobre histórico real
 make tune-real           # ajuste walk-forward + holdout + IC de factores
+make tune-real-weights   # igual, pero probando perfiles de pesos de factores
 ```
 
 **Protocolo de ajuste** (`packages/backtesting/tuning.py`, `pipelines/tune_strategy.py`):
@@ -53,7 +54,7 @@ make tune-real           # ajuste walk-forward + holdout + IC de factores
 2. **Grilla:** cada configuración se corre una vez. La grilla por defecto cubre el límite de turnover, el umbral de LONG y el tipo de ponderación; con `--grid archivo.yaml` se define otra.
 3. **Walk-forward:** en cada ventana de 3 meses se elige la mejor configuración con los 5 años previos y se mide su resultado fuera de muestra. Esto estima cuánto vale el *proceso de ajuste*, no la mejor corrida.
 4. **Validación final:** la mejor configuración pre-holdout se compara con v0.1.0 y el benchmark en el holdout.
-5. **Diagnóstico:** IC de Spearman por familia de factores y spread de quintiles, para separar "los factores no predicen" de "la cartera no aprovecha la señal".
+5. **Diagnóstico:** IC de Spearman por familia, por variable individual y por año, más el spread de quintiles, para separar "los factores no predicen" de "la cartera no aprovecha la señal".
 
 El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como nueva versión requiere revisión humana (§8.3).
 

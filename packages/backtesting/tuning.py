@@ -37,6 +37,8 @@ from backtesting.metrics import TRADING_DAYS, performance_summary
 from data_platform.features import build_feature_snapshot
 from data_platform.market import MarketData
 from quant_core.config import FACTOR_FAMILIES, StrategyConfig
+from quant_core.factors.definitions import FACTOR_DEFINITIONS
+from quant_core.factors.normalization import winsorized_sector_percentile
 from quant_core.signals.rules import generate_signals, label_signals, score_universe, scoring_key
 
 DEFAULT_GRID: dict[str, list[object]] = {
@@ -194,11 +196,32 @@ def factor_information_coefficients(
             row[f"ic_{name}"] = (
                 float(score[ok].rank().corr(fwd[ok].rank())) if ok.sum() >= 20 else np.nan
             )
+        # Individual features, ranked within sector exactly as the scorer does.
+        for features in FACTOR_DEFINITIONS.values():
+            for feature, higher_is_better in features.items():
+                if feature not in signals.columns or signals[feature].notna().sum() < 20:
+                    continue
+                pct = winsorized_sector_percentile(
+                    signals, feature, higher_is_better=higher_is_better
+                )
+                ok = pct.notna() & fwd.notna()
+                row[f"ic_feature_{feature}"] = (
+                    float(pct[ok].rank().corr(fwd[ok].rank())) if ok.sum() >= 20 else np.nan
+                )
         quintile = pd.qcut(signals["composite_score"].rank(method="first"), 5, labels=False)
         by_q = fwd.groupby(quintile).mean()
         row["q5_minus_q1"] = float(by_q.get(4, np.nan) - by_q.get(0, np.nan))
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def ic_by_year(ic: pd.DataFrame) -> pd.DataFrame:
+    """Mean IC of the composite and each family per calendar year."""
+    if ic.empty:
+        return pd.DataFrame()
+    columns = [f"ic_{n}" for n in ("composite", *FACTOR_FAMILIES) if f"ic_{n}" in ic.columns]
+    table = ic.groupby(pd.to_datetime(ic["date"]).dt.year)[columns].mean()
+    return table.rename(columns=lambda c: c.removeprefix("ic_")).dropna(axis=1, how="all")
 
 
 def summarize_ic(ic: pd.DataFrame, periods_per_year: int = 12) -> pd.DataFrame:
@@ -239,6 +262,7 @@ class TuningReport:
     holdout: dict[str, dict[str, float]]
     ic: pd.DataFrame
     ic_summary: pd.DataFrame
+    ic_yearly: pd.DataFrame
     best_config_id: str
     best_overrides: dict[str, object]
     candidate: StrategyConfig
@@ -340,6 +364,7 @@ def tune_strategy(
         holdout=holdout,
         ic=ic,
         ic_summary=summarize_ic(ic),
+        ic_yearly=ic_by_year(ic),
         best_config_id=best,
         best_overrides=overrides[best],
         candidate=candidate,

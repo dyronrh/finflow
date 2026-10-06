@@ -1,0 +1,11 @@
+# Grid over composite-weight profiles (used with: tune_strategy.py --grid this-file).
+# Selection is still walk-forward + holdout, so a profile only "wins" if it
+# keeps working out of sample. Revisions has no free data source, so its weight
+# is redistributed automatically; keep it in the dict because all five keys
+# are required.
+composite_weights:
+  - {value: 0.25, growth: 0.15, profitability: 0.25, momentum: 0.20, revisions: 0.15}  # v0.1.0
+  - {value: 0.10, growth: 0.20, profitability: 0.30, momentum: 0.25, revisions: 0.15}  # quality/momentum tilt
+  - {value: 0.00, growth: 0.25, profitability: 0.30, momentum: 0.30, revisions: 0.15}  # no value
+  - {value: 0.15, growth: 0.15, profitability: 0.35, momentum: 0.20, revisions: 0.15}  # quality tilt
+portfolio.weighting: [equal_weight, inverse_volatility]

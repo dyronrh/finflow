@@ -26,6 +26,9 @@ class MarketData:
     """Optional time-varying share counts: security_id, available_at, shares_outstanding."""
     membership: pd.DataFrame | None = None
     """Optional index membership intervals: security_id, start, end (end exclusive, NaT=open)."""
+    price_close: pd.DataFrame | None = None
+    """Optional split-adjusted, *not* dividend-adjusted close for market cap, price
+    filters and dollar volume. ``close`` is used when absent (synthetic data)."""
     benchmark_close: pd.Series | None = None
     """Optional external benchmark (e.g. SPY total-return proxy)."""
     metadata: dict[str, object] = field(default_factory=dict)

@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights
 
 install:
 	uv sync
@@ -34,3 +34,6 @@ backtest-real:
 
 tune-real:
 	uv run --extra real-data python pipelines/tune_strategy.py --source real
+
+tune-real-weights:
+	uv run --extra real-data python pipelines/tune_strategy.py --source real --grid configs/tuning/factor_weights.yaml

@@ -29,7 +29,12 @@ def load_source(args, start: str, end: str) -> MarketData:
     if args.source == "synthetic":
         first = f"{int(start[:4]) - 2}-01-01"
         return generate_synthetic_market(start=first, end=end, seed=args.seed)
-    return load_market(args.cache)
+    market = load_market(args.cache)
+    print(f"data_version: {market.data_version}")
+    print(f"universe: {market.metadata.get('universe', 'unknown')}")
+    for message in market.metadata.get("warnings", []):
+        print(f"WARNING: {message}")
+    return market
 
 
 def sec_user_agent() -> str:

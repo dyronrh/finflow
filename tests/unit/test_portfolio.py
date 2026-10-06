@@ -69,11 +69,32 @@ def test_exits_trade_even_inside_band():
 
 def test_turnover_cap_scales_trades():
     current = pd.Series({"A": 0.5, "B": 0.5})
+    target = pd.Series({"A": 0.2, "B": 0.2, "C": 0.3, "D": 0.3})
+    plan = plan_rebalance(current, target, trade_band=0.0, max_turnover=0.4)
+    assert plan.turnover_capped
+    assert plan.turnover == pytest.approx(0.4)
+    assert plan.final_weights.sum() == pytest.approx(1.0)
+
+
+def test_turnover_cap_never_leaves_residual_exits():
+    """Names dropped from the target are sold in full even when capped."""
+    current = pd.Series({f"H{i}": 0.1 for i in range(10)})
+    target = pd.Series({**{f"H{i}": 0.1 for i in range(8)}, "N1": 0.1, "N2": 0.1})
+    target = target + pd.Series({"H0": 0.02, "H1": -0.02}).reindex(target.index, fill_value=0)
+    plan = plan_rebalance(current, target, trade_band=0.0, max_turnover=0.25)
+    final = plan.final_weights
+    assert "H8" not in final.index and "H9" not in final.index
+    assert final.sum() == pytest.approx(1.0)  # exit proceeds reinvested
+    buys = target[target >= current.reindex(target.index, fill_value=0.0)].index
+    assert (final.reindex(buys) <= target[buys] + 1e-12).all()  # buys never overshoot
+    assert len(final) <= len(target)
+
+
+def test_turnover_cap_with_only_exits_reinvests_proceeds():
+    current = pd.Series({"A": 0.5, "B": 0.5})
     target = pd.Series({"C": 0.5, "D": 0.5})
     plan = plan_rebalance(current, target, trade_band=0.0, max_turnover=0.25)
-    assert plan.turnover_capped
-    assert plan.orders["delta_weight"].abs().sum() == pytest.approx(0.25)
-    assert plan.final_weights.sum() == pytest.approx(1.0)
+    assert plan.final_weights.to_dict() == pytest.approx({"C": 0.5, "D": 0.5})
 
 
 def test_initial_funding_is_exempt_from_turnover_cap():

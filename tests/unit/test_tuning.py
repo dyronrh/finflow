@@ -72,3 +72,17 @@ def test_tune_strategy_end_to_end(market, config):
         for stats in block.values():
             assert np.isfinite(stats["cagr"])
     assert {"composite", "value", "momentum"} <= set(report.ic_summary["factor"])
+    assert "feature_earnings_yield" in set(report.ic_summary["factor"])
+    assert "composite" in report.ic_yearly.columns
+
+
+def test_weight_profiles_can_be_tuned(config):
+    profile = {
+        "value": 0.0,
+        "growth": 0.25,
+        "profitability": 0.3,
+        "momentum": 0.3,
+        "revisions": 0.15,
+    }
+    tuned = apply_overrides(config, {"composite_weights": profile})
+    assert tuned.composite_weights == profile

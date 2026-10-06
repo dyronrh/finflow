@@ -76,6 +76,7 @@ def main() -> None:
     report.grid.to_csv(run_dir / "grid.csv", index=False)
     report.folds.to_csv(run_dir / "folds.csv", index=False)
     report.ic.to_csv(run_dir / "ic.csv", index=False)
+    report.ic_yearly.to_csv(run_dir / "ic_by_year.csv")
     (run_dir / "candidate.yaml").write_text(
         "# Candidate produced by pipelines/tune_strategy.py — NOT an approved strategy.\n"
         + yaml.safe_dump(report.candidate.model_dump(mode="json"), sort_keys=False)
@@ -95,8 +96,15 @@ def main() -> None:
         )
     )
 
+    summary = report.ic_summary
+    is_feature = summary["factor"].str.startswith("feature_")
     print("\n=== Factor information coefficients (pre-holdout, base config) ===")
-    print(report.ic_summary.round(3).to_string(index=False))
+    print(summary[~is_feature].round(3).to_string(index=False))
+    print("\n=== IC of individual features (sector-relative, signed so higher = better) ===")
+    features = summary[is_feature].assign(factor=lambda d: d["factor"].str.removeprefix("feature_"))
+    print(features.sort_values("t_stat").round(3).to_string(index=False))
+    print("\n=== Mean IC by year ===")
+    print(report.ic_yearly.round(3).to_string())
     print(f"\n=== Walk-forward out-of-sample ({len(report.folds)} folds) ===")
     for name, stats in report.walk_forward.items():
         print(f"{name:<26}{_fmt(stats)}")

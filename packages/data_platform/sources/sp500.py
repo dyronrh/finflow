@@ -92,7 +92,7 @@ def parse_changes(table: pd.DataFrame) -> pd.DataFrame:
     removed_col = pick(("removed", "ticker"), ("removed", "symbol"))
 
     def clean(value: object) -> str | None:
-        if value is None or (isinstance(value, float) and pd.isna(value)):
+        if value is None or (not isinstance(value, str) and pd.isna(value)):
             return None
         text = re.sub(r"\[.*?\]", "", str(value)).strip().upper().replace(".", "-")
         return text or None

@@ -26,7 +26,16 @@ from data_platform.sources.sic import sic_to_sector
 log = logging.getLogger(__name__)
 
 DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "data" / "local_dev_only" / "real"
-_TABLES = ("open", "close", "volume", "fundamentals", "shares", "securities", "membership")
+_TABLES = (
+    "open",
+    "close",
+    "price_close",
+    "volume",
+    "fundamentals",
+    "shares",
+    "securities",
+    "membership",
+)
 
 
 def fetch_real_market(
@@ -110,6 +119,7 @@ def fetch_real_market(
         securities=pd.DataFrame(securities),
         open=prices.open[ids],
         close=prices.close[ids],
+        price_close=prices.price_close[ids] if prices.price_close is not None else None,
         volume=prices.volume[ids],
         fundamentals=pd.concat(fundamentals, ignore_index=True),
         estimates=pd.DataFrame(),
@@ -155,11 +165,26 @@ def load_market(directory: Path = DEFAULT_CACHE / "processed") -> MarketData:
         if (directory / f"{name}.parquet").exists()
     }
     meta = json.loads((directory / "metadata.json").read_text())
+    warnings = list(meta.get("warnings", []))
+    if "price_close" not in tables:
+        warnings.append(
+            "cache predates the dividend-adjustment fix: market cap and value factors use "
+            "dividend-adjusted prices (look-ahead bias). Re-run `make fetch-data`."
+        )
+    if str(meta.get("universe", "")).startswith("current members only") or "universe" not in meta:
+        warnings.append(
+            "universe = current S&P 500 members only: strong survivorship bias, absolute "
+            "returns are inflated."
+        )
+    meta["warnings"] = warnings
+    for message in warnings:
+        log.warning(message)
     bench_path = directory / "benchmark.parquet"
     return MarketData(
         securities=tables["securities"],
         open=tables["open"],
         close=tables["close"],
+        price_close=tables.get("price_close"),
         volume=tables["volume"],
         fundamentals=tables["fundamentals"],
         estimates=pd.DataFrame(),

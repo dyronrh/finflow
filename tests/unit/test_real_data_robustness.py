@@ -84,3 +84,18 @@ def test_spy_benchmark_is_reported(market, config):
     with_spy = _copy(market, benchmark_close=market.close.mean(axis=1))
     result = run_backtest(with_spy, config, "2024-01-01", "2024-12-31")
     assert "spy_cagr" in result.summary and np.isfinite(result.summary["beta_vs_spy"])
+
+
+def test_levels_use_traded_price_not_dividend_adjusted(market, as_of):
+    """Market cap / ADV / price filter must not use dividend-adjusted levels
+    (those embed future dividends); returns still use the adjusted series."""
+    traded = market.close.copy()
+    adjusted = market.close * 0.6  # as if 40% of the level were future dividends
+    m = _copy(market, close=adjusted, open=market.open * 0.6, price_close=traded)
+    snap = build_feature_snapshot(m, as_of).set_index("security_id")
+    base = build_feature_snapshot(market, as_of).set_index("security_id")
+    pd.testing.assert_series_equal(snap["market_cap_usd"], base["market_cap_usd"])
+    pd.testing.assert_series_equal(snap["price"], base["price"])
+    pd.testing.assert_series_equal(snap["earnings_yield"], base["earnings_yield"])
+    # Constant scaling leaves returns-based features unchanged.
+    np.testing.assert_allclose(snap["mom_12_1"], base["mom_12_1"])

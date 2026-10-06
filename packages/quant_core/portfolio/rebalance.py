@@ -31,9 +31,15 @@ def plan_rebalance(
 
     * Changes smaller than ``trade_band`` are skipped (except full exits and
       new entries, which always trade).
-    * If the traded turnover ``Σ|Δw|`` exceeds ``max_turnover`` all trades are
-      scaled down proportionally. The initial funding of an empty portfolio is
-      exempt from the turnover cap.
+    * If the traded turnover ``Σ|Δw|`` exceeds ``max_turnover``:
+      - full exits (names no longer in the target) are always executed, so
+        deteriorated positions never linger as small residual holdings;
+      - all other trades move a fraction ``k`` of the way to target, with
+        ``k`` chosen so that the total stays within the cap when possible;
+      - exit proceeds not used by those trades are reinvested in names still
+        below target (never above it), so the cap does not create cash drag.
+      When exits alone exceed the budget the cap is exceeded by design.
+    * The initial funding of an empty portfolio is exempt from the cap.
     """
     index = current.index.union(target.index)
     cur = current.reindex(index, fill_value=0.0).astype(float)
@@ -49,8 +55,8 @@ def plan_rebalance(
     initial_funding = float(cur.abs().sum()) == 0.0
     capped = False
     if not initial_funding and turnover > max_turnover > 0:
-        executed = executed * (max_turnover / turnover)
-        turnover = max_turnover
+        executed = _cap_turnover(cur, tgt, executed, is_exit, max_turnover)
+        turnover = float(executed.abs().sum())
         capped = True
 
     reasons = pd.Series("", index=index)
@@ -76,3 +82,30 @@ def plan_rebalance(
         }
     )
     return RebalancePlan(orders=orders, turnover=turnover, turnover_capped=capped)
+
+
+def _cap_turnover(
+    cur: pd.Series,
+    tgt: pd.Series,
+    executed: pd.Series,
+    is_exit: pd.Series,
+    max_turnover: float,
+) -> pd.Series:
+    exits = executed.where(is_exit, 0.0)
+    rest = executed.where(~is_exit, 0.0)
+    exit_turnover = float(exits.abs().sum())
+    rest_turnover = float(rest.abs().sum())
+
+    # Exit proceeds are reinvested, so each unit sold costs ~2 units of turnover
+    # unless the scaled trades already absorb it.
+    budget = max_turnover - 2.0 * exit_turnover
+    denom = rest_turnover - exit_turnover
+    k = min(max(budget / denom, 0.0), 1.0) if denom > 0 else 0.0
+    final = cur + exits + k * rest
+
+    intended = float((cur + executed).sum())
+    shortfall = intended - float(final.sum())
+    gap = (tgt - final).where(~is_exit & (tgt > 0), 0.0).clip(lower=0.0)
+    if shortfall > 1e-12 and gap.sum() > 0:
+        final = final + gap * min(shortfall / float(gap.sum()), 1.0)
+    return final - cur

@@ -1,8 +1,14 @@
 """Daily prices from Yahoo Finance via ``yfinance``.
 
-Prices are split- and dividend-adjusted (``auto_adjust=True``), so close-to-close
-returns approximate total returns. Volume from Yahoo is split-adjusted, so
-``adjusted close × volume`` approximates traded dollar volume.
+Two price series are kept:
+
+* ``open`` / ``close``: split- **and dividend**-adjusted, so returns are total
+  returns. Used for momentum, volatility, fills and valuation.
+* ``price_close``: split-adjusted only (the price that actually traded, in
+  today's share units). Used for market cap, the minimum-price filter and
+  dollar volume. Dividend-adjusted levels must not be used there: Yahoo lowers
+  historical prices by dividends paid *later*, which would make future
+  dividend payers look cheaper (a look-ahead bias in the value factor).
 
 Yahoo is *not* used for fundamentals: it only exposes the last few quarters
 and no publication dates, which would break point-in-time discipline.
@@ -15,7 +21,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-FIELDS = ("Open", "Close", "Volume")
+FIELDS = ("Open", "Close", "Adj Close", "Volume")
 
 
 @dataclass
@@ -26,6 +32,8 @@ class YahooPrices:
     splits: pd.DataFrame
     """Long format: security_id, date, ratio (e.g. 4.0 for a 4-for-1 split)."""
     failed: list[str]
+    price_close: pd.DataFrame | None = None
+    """Split-adjusted (not dividend-adjusted) close."""
 
 
 def to_yahoo_symbol(ticker: str) -> str:
@@ -50,7 +58,7 @@ def download_prices(
             chunk,
             start=start,
             end=end,
-            auto_adjust=True,
+            auto_adjust=False,
             actions=True,
             group_by="column",
             threads=True,
@@ -71,7 +79,14 @@ def download_prices(
         wide.index = pd.DatetimeIndex(wide.index).tz_localize(None).normalize()
         return wide.sort_index()
 
-    close = combine("Close").dropna(axis=1, how="all")
+    price_close = combine("Close").dropna(axis=1, how="all")
+    adj_close = combine("Adj Close").reindex(columns=price_close.columns)
+    if adj_close.empty:
+        adj_close = price_close
+    adj_close = adj_close.fillna(price_close)
+    # Total-return adjustment factor, applied to the open as well.
+    factor = (adj_close / price_close).where(price_close > 0)
+    close = adj_close
     failed = sorted(set(symbols) - set(close.columns))
     splits_wide = combine("Stock Splits")
     splits = (
@@ -84,8 +99,9 @@ def download_prices(
     )
     splits = splits[splits["ratio"] > 0][["security_id", "date", "ratio"]].reset_index(drop=True)
     return YahooPrices(
-        open=combine("Open").reindex(columns=close.columns),
+        open=combine("Open").reindex(columns=close.columns) * factor,
         close=close,
+        price_close=price_close,
         volume=combine("Volume").reindex(columns=close.columns),
         splits=splits,
         failed=failed,

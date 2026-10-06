@@ -21,6 +21,9 @@ def build_feature_snapshot(market: MarketData, as_of: pd.Timestamp) -> pd.DataFr
     as_of = pd.Timestamp(as_of)
     close = market.close.loc[:as_of]
     volume = market.volume.loc[:as_of]
+    # Levels (market cap, $ volume, price filter) use the traded price; returns
+    # use the dividend-adjusted series. See data_platform.sources.yahoo.
+    traded = market.price_close.loc[:as_of] if market.price_close is not None else close
     if close.empty:
         raise ValueError(f"no price history on or before {as_of.date()}")
     decision_date = close.index[-1]
@@ -29,10 +32,10 @@ def build_feature_snapshot(market: MarketData, as_of: pd.Timestamp) -> pd.DataFr
     out = out.set_index("security_id")
 
     # A security must have traded on the decision date; stale prices are not used.
-    price = close.iloc[-1]
+    price = traded.iloc[-1].reindex(out.index)
     out["price"] = price
     out["market_cap_usd"] = price * _shares_as_of(market, as_of, out.index)
-    out["adv_usd"] = (close.tail(20) * volume.tail(20)).mean()
+    out["adv_usd"] = (traded.tail(20) * volume.tail(20)).mean()
 
     log_ret = np.log(close.tail(64)).diff()
     out["volatility_63d"] = log_ret.std() * np.sqrt(TRADING_DAYS_YEAR)
