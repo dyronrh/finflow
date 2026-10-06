@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import time
 from pathlib import Path
 
@@ -27,6 +28,36 @@ import pandas as pd
 
 SEC_BASE = "https://data.sec.gov"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+CIK_LOOKUP_URL = "https://www.sec.gov/Archives/edgar/cik-lookup-data.txt"
+_NAME_STOPWORDS = {
+    "INC",
+    "INCORPORATED",
+    "CORP",
+    "CORPORATION",
+    "CO",
+    "COMPANY",
+    "LTD",
+    "LIMITED",
+    "PLC",
+    "LLC",
+    "LP",
+    "HOLDINGS",
+    "HOLDING",
+    "GROUP",
+    "THE",
+    "NV",
+    "SA",
+    "AG",
+    "CLASS",
+    "A",
+    "B",
+    "C",
+    "COMMON",
+    "STOCK",
+    "NEW",
+    "DEL",
+    "DE",
+}
 FORMS = ("10-Q", "10-K", "10-Q/A", "10-K/A", "10-KT", "10-QT")
 
 QUARTER_DAYS = (75, 105)
@@ -123,6 +154,31 @@ class SecClient:
         return self._get_json(
             f"{SEC_BASE}/submissions/CIK{cik:010d}.json", f"submissions/CIK{cik:010d}.json"
         )
+
+
+# --------------------------------------------------------------------------- names
+def normalize_company_name(name: str) -> str:
+    """'The Walt Disney Co.' → 'WALT DISNEY'; used to match removed members to CIKs."""
+    text = re.sub(r"[^A-Z0-9 ]+", " ", str(name).upper().replace("&", " AND "))
+    words = [w for w in text.split() if w not in _NAME_STOPWORDS]
+    return " ".join(words)
+
+
+def parse_cik_lookup(text: str) -> dict[str, set[int]]:
+    out: dict[str, set[int]] = {}
+    for line in text.splitlines():
+        parts = line.rstrip().rsplit(":", 2)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            continue
+        key = normalize_company_name(parts[0])
+        if key:
+            out.setdefault(key, set()).add(int(parts[1]))
+    return out
+
+
+def names_match(a: str, b: str) -> bool:
+    na, nb = normalize_company_name(a), normalize_company_name(b)
+    return bool(na and nb) and (na == nb or na.startswith(nb) or nb.startswith(na))
 
 
 # --------------------------------------------------------------------------- parse

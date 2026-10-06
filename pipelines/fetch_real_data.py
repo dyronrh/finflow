@@ -39,7 +39,20 @@ def main() -> None:
         f"fundamental rows: {len(f)}; median filing lag: "
         f"{(f['available_at'] - f['event_time']).dt.days.median():.0f} days"
     )
-    print(f"universe: {market.metadata['universe']} ({market.metadata['change_log_rows']} changes)")
+    meta = market.metadata
+    print(f"universe: {meta['universe']}")
+    print(
+        f"members in window: {meta['members_in_window']}; former members with data: "
+        f"{meta['former_members_with_data']}; recycled tickers dropped: "
+        f"{len(meta['tickers_dropped_as_recycled'])}"
+    )
+    print(f"CIK resolution: {meta['cik_resolution']}")
+    print("coverage of index members by year (with prices / with prices + fundamentals):")
+    for row in meta["coverage_by_year"]:
+        print(
+            f"  {row['year']}: {row['with_prices']:.0%} / "
+            f"{row['with_prices_and_fundamentals']:.0%} of {row['members']}"
+        )
     print(f"without prices (likely delisted): {len(market.metadata['tickers_without_prices'])}")
     print(f"without SEC facts: {len(market.metadata['tickers_without_sec_facts'])}")
 

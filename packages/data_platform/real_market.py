@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 from data_platform.market import MarketData
-from data_platform.sources import sec_edgar, sp500, yahoo
+from data_platform.sources import sec_edgar, sp500, sp500_history, yahoo
 from data_platform.sources.sic import sic_to_sector
 
 log = logging.getLogger(__name__)
@@ -38,6 +38,114 @@ _TABLES = (
 )
 
 
+def _membership(
+    current: pd.DataFrame, changes_table: pd.DataFrame | None, user_agent: str
+) -> tuple[pd.DataFrame, str, pd.DataFrame]:
+    """Point-in-time membership, best source first. Returns (intervals, note, changes)."""
+    changes = pd.DataFrame(columns=["date", "added", "removed", "removed_name"])
+    try:
+        if changes_table is not None:
+            changes = sp500.parse_changes(changes_table)
+    except ValueError as exc:
+        log.warning("Wikipedia change log unusable: %s", exc)
+
+    current_ids = current["security_id"].tolist()
+    try:
+        long = sp500_history.parse_components(sp500_history.fetch_components_csv(user_agent))
+        if long.empty:
+            raise ValueError("historical components CSV parsed to zero rows")
+        intervals = sp500_history.membership_from_snapshots(long)
+        last = long["date"].max()
+        intervals = sp500_history.reconcile_with_current(intervals, current_ids, last)
+        note = (
+            "point-in-time membership from fja05680/sp500 historical components "
+            f"(through {last.date()}, reconciled with current constituents)"
+        )
+        return intervals, note, changes
+    except Exception as exc:  # network, format change, rate limit...
+        log.warning("historical components dataset unavailable (%s); trying Wikipedia", exc)
+
+    if not changes.empty:
+        intervals = sp500.membership_intervals(current_ids, changes)
+        return (
+            intervals,
+            "approximate point-in-time membership from the Wikipedia change log",
+            changes,
+        )
+    log.warning("no membership history available; using current members only")
+    intervals = sp500.membership_intervals(current_ids, changes)
+    return intervals, "current members only: strong survivorship bias", changes
+
+
+def _resolve_cik(
+    sid: str,
+    is_current: bool,
+    removed_name: str | None,
+    wiki_cik: dict[str, object],
+    ticker_cik: dict[str, int],
+    ticker_title: dict[str, str],
+    name_ciks: dict[str, set[int]] | None,
+) -> tuple[int | None, str]:
+    """CIK for a security, guarding against tickers recycled by other companies."""
+    cik = wiki_cik.get(sid)
+    if is_current and cik is not None and pd.notna(cik):
+        return int(cik), "wikipedia"
+    if is_current and sid in ticker_cik:
+        return ticker_cik[sid], "sec_ticker"
+    # Removed member: today's owner of the ticker may be a different company.
+    if (
+        removed_name
+        and sid in ticker_cik
+        and sec_edgar.names_match(ticker_title[sid], removed_name)
+    ):
+        return ticker_cik[sid], "sec_ticker_name_checked"
+    if removed_name and name_ciks:
+        matches = name_ciks.get(sec_edgar.normalize_company_name(removed_name), set())
+        if len(matches) == 1:
+            return next(iter(matches)), "sec_name_lookup"
+    if sid in ticker_cik:
+        # No name to check against; accepted only if filings overlap the
+        # membership period (verified by the caller).
+        return ticker_cik[sid], "sec_ticker_unverified"
+    return None, "unresolved"
+
+
+def _overlaps(fundamentals: pd.DataFrame, intervals: pd.DataFrame) -> bool:
+    if fundamentals.empty:
+        return False
+    ends = fundamentals["event_time"]
+    for row in intervals.itertuples():
+        lo = row.start if pd.notna(row.start) else pd.Timestamp.min
+        hi = row.end if pd.notna(row.end) else pd.Timestamp.max
+        if ((ends >= lo) & (ends < hi)).any():
+            return True
+    return False
+
+
+def coverage_by_year(market: MarketData) -> pd.DataFrame:
+    """Share of index members (per year-end) with prices / with fundamentals."""
+    if market.membership is None:
+        return pd.DataFrame()
+    with_prices = set(market.close.columns)
+    with_facts = set(market.fundamentals["security_id"]) if len(market.fundamentals) else set()
+    rows = []
+    for year in sorted({d.year for d in market.dates}):
+        at = pd.Timestamp(f"{year}-12-31")
+        members = market.members_at(at) or set()
+        if not members:
+            continue
+        rows.append(
+            {
+                "year": year,
+                "members": len(members),
+                "with_prices": len(members & with_prices) / len(members),
+                "with_prices_and_fundamentals": len(members & with_prices & with_facts)
+                / len(members),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def fetch_real_market(
     start: str,
     end: str,
@@ -45,53 +153,89 @@ def fetch_real_market(
     cache_dir: Path = DEFAULT_CACHE,
     max_securities: int | None = None,
     benchmark: str = "SPY",
+    equal_weight_reference: str = "RSP",
 ) -> MarketData:
     raw = Path(cache_dir) / "raw"
     sec = sec_edgar.SecClient(user_agent, raw / "sec")
 
     constituents_table, changes_table = sp500.fetch_tables(user_agent)
     current = sp500.parse_constituents(constituents_table)
-    universe_note = "approximate point-in-time membership from the Wikipedia change log"
-    try:
-        if changes_table is None:
-            raise ValueError("change-log table not found on the Wikipedia page")
-        changes = sp500.parse_changes(changes_table)
-        if changes.empty:
-            raise ValueError("change-log table parsed to zero dated rows")
-    except ValueError as exc:
-        log.warning("S&P 500 change log unusable (%s); using current members only", exc)
-        changes = pd.DataFrame(columns=["date", "added", "removed"])
-        universe_note = f"current members only ({exc}): strong survivorship bias"
-    membership = sp500.membership_intervals(current["security_id"].tolist(), changes)
+    membership, universe_note, changes = _membership(current, changes_table, user_agent)
     membership = membership[(membership["end"].isna()) | (membership["end"] > pd.Timestamp(start))]
+    tagged = membership["security_id"].map(sp500_history.is_reused_ticker_tag)
+    membership = membership[~tagged].reset_index(drop=True)
+    log.info("universe: %s", universe_note)
 
+    current_ids = set(current["security_id"])
     tickers = sorted(set(membership["security_id"]))
     if max_securities:
-        tickers = sorted(set(current["security_id"]))[:max_securities]
+        tickers = sorted(current_ids)[:max_securities]
         membership = membership[membership["security_id"].isin(tickers)]
+    log.info(
+        "requesting %d tickers (%d current members, %d former members)",
+        len(tickers),
+        len(set(tickers) & current_ids),
+        len(set(tickers) - current_ids),
+    )
 
-    log.info("downloading prices for %d tickers from Yahoo Finance", len(tickers))
     prices = yahoo.download_prices(tickers, start, end)
     spy = yahoo.download_benchmark(benchmark, start, end)
-    have_prices = list(prices.close.columns)
-    log.info("prices: %d ok, %d missing (mostly delisted)", len(have_prices), len(prices.failed))
+    try:
+        rsp = yahoo.download_benchmark(equal_weight_reference, start, end)
+    except RuntimeError as exc:
+        log.warning("equal-weight reference unavailable: %s", exc)
+        rsp = None
 
-    cik_map = sec.ticker_to_cik()
-    cik_from_wiki = dict(zip(current["security_id"], current.get("cik", pd.Series()), strict=False))
+    # A former member whose Yahoo history starts after it left the index is a
+    # different company that reused the ticker: drop it.
+    first_price = prices.close.apply(pd.Series.first_valid_index)
+    last_end = membership.groupby("security_id")["end"].max()
+    has_open = membership.groupby("security_id")["end"].apply(lambda e: e.isna().any())
+    reused = [
+        sid
+        for sid in prices.close.columns
+        if not has_open.get(sid, True)
+        and pd.notna(first_price.get(sid))
+        and first_price[sid] >= last_end[sid]
+    ]
+    have_prices = [sid for sid in prices.close.columns if sid not in set(reused)]
+    log.info(
+        "prices: %d ok, %d missing (mostly delisted), %d dropped as recycled tickers",
+        len(have_prices),
+        len(prices.failed),
+        len(reused),
+    )
+
+    ticker_cik = sec.ticker_to_cik()
+    ticker_title = sec.ticker_titles()
+    wiki_cik = dict(zip(current["security_id"], current.get("cik", pd.Series()), strict=False))
+    removed_names = {
+        r: n
+        for r, n in zip(changes.get("removed", []), changes.get("removed_name", []), strict=False)
+        if r and isinstance(n, str) and n and n.lower() != "nan"
+    }
+    name_ciks = None
+    if any(sid not in current_ids for sid in have_prices):
+        try:
+            name_ciks = sec.name_to_ciks()
+        except Exception as exc:
+            log.warning("SEC name lookup unavailable (%s)", exc)
     sectors = current.set_index("security_id")[["ticker", "sector_id", "industry_id"]]
 
-    fundamentals, shares, securities, no_facts = [], [], [], []
+    fundamentals, shares, securities, no_facts, cik_sources = [], [], [], [], {}
     for i, sid in enumerate(have_prices):
-        cik = cik_from_wiki.get(sid)
-        cik = int(cik) if pd.notna(cik) else cik_map.get(sid)
-        if cik is None:
+        is_current = sid in current_ids
+        cik, how = _resolve_cik(
+            sid, is_current, removed_names.get(sid), wiki_cik, ticker_cik, ticker_title, name_ciks
+        )
+        facts = sec.company_facts(cik) if cik is not None else {}
+        f = sec_edgar.parse_company_facts(facts, sid) if facts else pd.DataFrame()
+        if f.empty or (
+            not is_current and not _overlaps(f, membership[membership["security_id"] == sid])
+        ):
             no_facts.append(sid)
             continue
-        facts = sec.company_facts(cik)
-        if not facts:
-            no_facts.append(sid)
-            continue
-        f = sec_edgar.parse_company_facts(facts, sid)
+        cik_sources[how] = cik_sources.get(how, 0) + 1
         s = sec_edgar.parse_share_counts(facts, sid)
         if not s.empty:
             # Express historical share counts in today's split-adjusted units.
@@ -115,6 +259,7 @@ def fetch_real_market(
             log.info("SEC facts: %d/%d", i + 1, len(have_prices))
 
     ids = [row["security_id"] for row in securities]
+    former = [sid for sid in ids if sid not in current_ids]
     market = MarketData(
         securities=pd.DataFrame(securities),
         open=prices.open[ids],
@@ -124,21 +269,31 @@ def fetch_real_market(
         fundamentals=pd.concat(fundamentals, ignore_index=True),
         estimates=pd.DataFrame(),
         shares=pd.concat(shares, ignore_index=True),
-        membership=membership[membership["security_id"].isin(ids)].reset_index(drop=True),
+        # Membership keeps *all* members, including those without data, so that
+        # coverage can be measured; the scorer only sees names with data anyway.
+        membership=membership.reset_index(drop=True),
         benchmark_close=spy.reindex(prices.close.index).ffill(),
+        equal_weight_reference=rsp.reindex(prices.close.index).ffill() if rsp is not None else None,
         metadata={
-            "source": "yahoo_finance+sec_edgar+wikipedia_sp500",
-            "survivorship_bias": (
-                "partial: removed S&P 500 members without Yahoo history are missing"
-            ),
+            "source": "yahoo_finance+sec_edgar+sp500_history",
             "universe": universe_note,
             "change_log_rows": len(changes),
+            "members_in_window": int(membership["security_id"].nunique()),
             "tickers_requested": len(tickers),
+            "former_members_with_data": len(former),
             "tickers_without_prices": prices.failed,
+            "tickers_dropped_as_recycled": reused,
             "tickers_without_sec_facts": no_facts,
+            "cik_resolution": cik_sources,
+            "survivorship_bias": (
+                "partial: former members without Yahoo prices or SEC facts are missing; "
+                "compare the equal-weight universe with RSP to estimate the residual bias"
+            ),
             "analyst_estimates": "not available (revisions factor disabled)",
         },
     )
+    coverage = coverage_by_year(market)
+    market.metadata["coverage_by_year"] = coverage.round(3).to_dict("records")
     save_market(market, Path(cache_dir) / "processed")
     return market
 
@@ -151,6 +306,8 @@ def save_market(market: MarketData, directory: Path) -> None:
             frame.to_parquet(directory / f"{name}.parquet")
     if market.benchmark_close is not None:
         market.benchmark_close.to_frame("benchmark").to_parquet(directory / "benchmark.parquet")
+    if market.equal_weight_reference is not None:
+        market.equal_weight_reference.to_frame("rsp").to_parquet(directory / "rsp.parquet")
     meta = {**market.metadata, "data_version": market.data_version}
     (directory / "metadata.json").write_text(json.dumps(meta, indent=2, default=str))
 
@@ -191,6 +348,11 @@ def load_market(directory: Path = DEFAULT_CACHE / "processed") -> MarketData:
         shares=tables.get("shares"),
         membership=tables.get("membership"),
         benchmark_close=pd.read_parquet(bench_path)["benchmark"] if bench_path.exists() else None,
+        equal_weight_reference=(
+            pd.read_parquet(directory / "rsp.parquet")["rsp"]
+            if (directory / "rsp.parquet").exists()
+            else None
+        ),
         data_version=meta.pop("data_version", ""),
         metadata=meta,
     )

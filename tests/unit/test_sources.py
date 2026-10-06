@@ -236,3 +236,72 @@ def test_membership_with_empty_change_log_keeps_current_members():
     m = sp500.membership_intervals(["A", "B"], empty)
     assert set(m["security_id"]) == {"A", "B"}
     assert m["start"].isna().all() and m["end"].isna().all()
+
+
+# --------------------------------------------------------------- survivorship
+from data_platform.real_market import _resolve_cik  # noqa: E402
+from data_platform.sources import sp500_history  # noqa: E402
+
+
+def test_history_snapshots_to_intervals():
+    raw = pd.DataFrame(
+        {
+            "date": ["1996-01-02", "2010-05-03", "2015-01-05"],
+            "tickers": ["AAA,BBB,BRK.B", "AAA,BRK.B,CCC", "BRK.B,CCC,DDD"],
+        }
+    )
+    long = sp500_history.parse_components(raw)
+    assert "BRK-B" in set(long["security_id"])
+    m = sp500_history.membership_from_snapshots(long).set_index("security_id")
+    assert pd.isna(m.loc["AAA", "start"]) and m.loc["AAA", "end"] == pd.Timestamp("2015-01-05")
+    assert m.loc["BBB", "end"] == pd.Timestamp("2010-05-03")
+    assert m.loc["CCC", "start"] == pd.Timestamp("2010-05-03") and pd.isna(m.loc["CCC", "end"])
+    assert m.loc["DDD", "start"] == pd.Timestamp("2015-01-05")
+
+
+def test_history_reconciled_with_current_constituents():
+    m = pd.DataFrame(
+        {"security_id": ["A", "B"], "start": [pd.NaT, pd.NaT], "end": [pd.NaT, pd.NaT]}
+    ).astype({"start": "datetime64[ns]", "end": "datetime64[ns]"})
+    out = sp500_history.reconcile_with_current(m, ["A", "C"], pd.Timestamp("2026-09-01"))
+    out = out.set_index("security_id")
+    assert out.loc["B", "end"] == pd.Timestamp("2026-09-01")  # left after dataset date
+    assert out.loc["C", "start"] == pd.Timestamp("2026-09-01")  # joined after dataset date
+    assert pd.isna(out.loc["A", "end"])
+
+
+def test_reused_ticker_tags_are_detected():
+    assert sp500_history.is_reused_ticker_tag("ABC-199912")
+    assert not sp500_history.is_reused_ticker_tag("BRK-B")
+
+
+def test_company_name_normalization_and_lookup():
+    assert sec_edgar.normalize_company_name("The Walt Disney Co.") == "WALT DISNEY"
+    assert sec_edgar.normalize_company_name("AT&T Inc.") == "AT AND T"
+    lookup = sec_edgar.parse_cik_lookup(
+        "WALT DISNEY CO:0001744489:\nWALT DISNEY CO /DE/:0001001039:\nXILINX INC:0000743988:\n"
+    )
+    assert lookup["XILINX"] == {743988}
+    assert len(lookup["WALT DISNEY"]) == 2  # ambiguous: will not be used
+
+
+def test_resolve_cik_does_not_trust_recycled_tickers():
+    ticker_cik = {"OLD": 900}
+    titles = {"OLD": "Brand New Company Inc"}
+    names = {"OLD WIDGETS": {777}, "AMBIG": {1, 2}}
+    # removed member, ticker now belongs to someone else → name lookup wins
+    assert _resolve_cik("OLD", False, "Old Widgets Corp", {}, ticker_cik, titles, names) == (
+        777,
+        "sec_name_lookup",
+    )
+    # ticker owner's title matches the removed name → accepted
+    titles_ok = {"OLD": "Old Widgets Inc"}
+    assert _resolve_cik("OLD", False, "Old Widgets Corp", {}, ticker_cik, titles_ok, names)[1] == (
+        "sec_ticker_name_checked"
+    )
+    # ambiguous name and no title match → unverified (caller checks filing overlap)
+    assert _resolve_cik("OLD", False, "Ambig", {}, ticker_cik, titles, names)[1] == (
+        "sec_ticker_unverified"
+    )
+    # current members use Wikipedia's CIK
+    assert _resolve_cik("CUR", True, None, {"CUR": 5}, {}, {}, None) == (5, "wikipedia")

@@ -327,6 +327,11 @@ def tune_strategy(
         "base_same_windows": _stats(returns["base"].reindex(oos.index), oos_bench),
         "benchmark_same_windows": _stats(oos_bench, oos_bench),
     }
+    rsp = None
+    if market.equal_weight_reference is not None:
+        rsp = market.equal_weight_reference.reindex(results["base"].equity.index).ffill()
+        rsp = rsp.pct_change().reindex(returns.index)
+        walk_forward["rsp_same_windows"] = _stats(rsp.reindex(oos.index), oos_bench)
 
     # Final choice on all pre-holdout data, judged once on the holdout.
     in_sample = {c: score(returns[c][pre], bench[pre]) for c in returns.columns}
@@ -336,6 +341,8 @@ def tune_strategy(
         "base": _stats(returns["base"][post], bench[post]),
         "benchmark": _stats(bench[post], bench[post]),
     }
+    if rsp is not None:
+        holdout["rsp"] = _stats(rsp[post], bench[post])
 
     grid_rows = []
     for cid, r in results.items():

@@ -34,7 +34,9 @@ Implementado (núcleo del MVP, Sprints 2–5):
 |---|---|---|
 | Precios diarios y SPY | Yahoo Finance (`yfinance`) | Sí: se usa el cierre de `t` y se ejecuta en la apertura de `t+1`. Los retornos usan precios ajustados por dividendos; market cap, ADV y filtro de precio usan el precio negociado (ajustado solo por splits), porque el ajuste por dividendos incorpora dividendos futuros |
 | Fundamentales trimestrales y acciones en circulación | SEC EDGAR XBRL (`companyfacts`) | Sí: `available_at` = fecha de filing; se conserva el **primer** valor publicado, nunca reexpresiones |
-| Universo y sector | S&P 500 en Wikipedia (miembros actuales + historial de altas/bajas) | Aproximado (ver limitaciones) |
+| Universo | Composición histórica del S&P 500 (dataset público `fja05680/sp500`, con Wikipedia como respaldo) | Sí: una acción solo entra al universo desde que se incorporó al índice y sale cuando lo dejó |
+| Sector | GICS actual (Wikipedia) o SIC de la SEC para ex-miembros | Aproximado |
+| Referencia sin sesgo | RSP (ETF equal-weight del S&P 500) en Yahoo | Sí; se usa para *medir* el sesgo residual |
 | Estimaciones de analistas | — | No hay fuente gratuita PIT: el factor *revisions* queda desactivado y su peso se redistribuye |
 
 Yahoo no se usa para fundamentales porque solo entrega los últimos trimestres y sin fecha de publicación.
@@ -58,13 +60,22 @@ make tune-real-weights   # igual, pero probando perfiles de pesos de factores
 
 El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como nueva versión requiere revisión humana (§8.3).
 
-**Limitaciones del histórico gratuito:**
-- **Sesgo de supervivencia residual:** las empresas que salieron del S&P 500 y ya no tienen historial en Yahoo quedan fuera, lo que favorece al backtest.
-- **Sectores:** se usa la clasificación GICS actual, y el código SIC para las empresas retiradas.
-- **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A; deuda = deuda de largo plazo + corto plazo). Bancos y aseguradoras quedan con cobertura parcial.
+**Sesgo de supervivencia: qué se corrige y qué se mide**
+
+- **Corregido:**
+  - Membresía point-in-time: una empresa que entró al índice en 2020 no puede elegirse en 2015.
+  - Los ex-miembros con datos se incluyen. Su CIK se busca por nombre en la SEC, y por ticker solo si el nombre coincide, porque los tickers se reciclan.
+  - Se descartan los tickers reutilizados por otra empresa.
+  - Una posición cuya acción deja de cotizar se liquida al último precio.
+- **Medido:** los ex-miembros sin precios en Yahoo siguen faltando. El backtest reporta `estimated_survivorship_bias_cagr`: el CAGR del equal-weight de nuestro universo menos el de RSP. Esa diferencia es lo que valen al año las empresas que faltan. `fetch-data` imprime la cobertura de miembros por año.
+- **Supuesto:** al deslistarse no se aplica una pérdida adicional; una quiebra puede perder más de lo asumido.
+
+**Otras limitaciones del histórico gratuito:**
+- **Sectores:** se usa la clasificación GICS actual.
+- **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A). Bancos y aseguradoras quedan con cobertura parcial.
 - **Cambio de configuración:** el walk-forward no cobra el coste de cambiar de configuración entre ventanas.
 
-Pendiente: fuente PIT de estimaciones de analistas, universo PIT completo (proveedor con delistings), PostgreSQL/DuckDB/MinIO, Docker Compose, frontend Next.js, risk engine (VaR/CVaR, beta, alertas), walk-forward, optimización convexa, paper trading.
+Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), PostgreSQL/DuckDB/MinIO, Docker Compose, frontend Next.js, risk engine (VaR/CVaR, beta, alertas), walk-forward, optimización convexa, paper trading.
 
 ---
 

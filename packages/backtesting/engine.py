@@ -29,6 +29,11 @@ from quant_core.portfolio.construction import build_target_weights
 from quant_core.portfolio.rebalance import plan_rebalance
 from quant_core.signals.rules import generate_signals
 
+# Trading days without any quote before a held name is treated as delisted and
+# liquidated at its last price. No delisting return is applied (a bankruptcy
+# may lose more than this assumes; acquisitions usually close near last price).
+DELIST_GRACE_DAYS = 5
+
 FeatureProvider = Callable[[pd.Timestamp], pd.DataFrame]
 SignalProvider = Callable[[pd.Timestamp, StrategyConfig], pd.DataFrame]
 
@@ -90,6 +95,14 @@ def run_backtest(
     columns = {sid: j for j, sid in enumerate(market.close.columns)}
     valuation = market.close.ffill().loc[dates].to_numpy()
     opens = market.open.reindex(columns=market.close.columns).loc[dates].to_numpy()
+    # Position (in ``dates``) of each security's final quote: after it, the name
+    # has been delisted / acquired and is liquidated at its last price.
+    final_quote = market.close.apply(pd.Series.last_valid_index)
+    delisted_after = {
+        sid: int(dates.searchsorted(day, side="right")) - 1
+        for sid, day in final_quote.items()
+        if pd.notna(day) and day < dates[-1]
+    }
 
     cash = initial_nav
     shares: dict[str, float] = {}
@@ -99,6 +112,23 @@ def run_backtest(
 
     for i, date in enumerate(dates):
         close_row = valuation[i]
+
+        for s in [s for s in shares if i > delisted_after.get(s, len(dates)) + DELIST_GRACE_DAYS]:
+            price = float(close_row[columns[s]])
+            notional = -shares.pop(s) * price
+            cost = costs.cost(notional)
+            cash -= notional + cost
+            trades.append(
+                {
+                    "signal_date": date,
+                    "fill_date": date,
+                    "security_id": s,
+                    "side": "DELISTED_SELL",
+                    "fill_price": price,
+                    "notional_usd": notional,
+                    "cost_usd": cost,
+                }
+            )
 
         if pending is not None:
             signal_date, final_weights = pending
@@ -124,6 +154,18 @@ def run_backtest(
         if date in schedule and date != dates[-1]:
             current = pd.Series({s: v / nav for s, v in values.items()}, dtype=float)
             signals = signals_for(date, config)
+            if signals.empty or "composite_score" not in signals.columns:
+                # No scorable names (data gap): keep the portfolio, do not liquidate.
+                rebalance_log.append(
+                    {
+                        "signal_date": date,
+                        "n_targets": 0,
+                        "planned_turnover": 0.0,
+                        "turnover_capped": False,
+                        "skipped": "no_eligible_signals",
+                    }
+                )
+                continue
             target = build_target_weights(signals, pcfg, set(current.index))
             plan = plan_rebalance(current, target, pcfg.trade_band, pcfg.max_turnover_per_rebalance)
             pending = (date, plan.final_weights)
@@ -161,6 +203,18 @@ def run_backtest(
         summary["spy_cagr"] = spy_summary.get("cagr", float("nan"))
         summary["spy_sharpe"] = spy_summary.get("sharpe_ratio", float("nan"))
         summary["beta_vs_spy"] = beta(equity_s.pct_change(), spy.pct_change())
+    if market.equal_weight_reference is not None:
+        rsp = market.equal_weight_reference.reindex(dates).ffill()
+        rsp_summary = performance_summary(rsp)
+        summary["rsp_cagr"] = rsp_summary.get("cagr", float("nan"))
+        summary["rsp_sharpe"] = rsp_summary.get("sharpe_ratio", float("nan"))
+        # Our equal-weight universe minus the real equal-weight S&P 500 (RSP,
+        # ~0.2% fee): what the missing former members are worth per year.
+        summary["estimated_survivorship_bias_cagr"] = (
+            summary["benchmark_cagr"] - summary["rsp_cagr"]
+        )
+    if len(trades_df):
+        summary["delisted_liquidations"] = float((trades_df["side"] == "DELISTED_SELL").sum())
     summary["unfilled_orders"] = float(len(unfilled))
     summary["total_costs_usd"] = float(trades_df["cost_usd"].sum()) if len(trades_df) else 0.0
     summary["avg_turnover_per_rebalance"] = (

@@ -24,6 +24,8 @@ def select_holdings(
     REDUCE/AVOID names are never bought. If the universe cannot supply
     ``min_holdings`` names the portfolio is smaller and caps leave cash.
     """
+    if signals.empty or "composite_score" not in signals.columns:
+        return signals.iloc[0:0]
     ranked = signals.sort_values(["composite_score", "security_id"], ascending=[False, True])
     decisions = ranked["decision"]
     keep = ranked["security_id"].isin(current_holdings) & ~decisions.isin(

@@ -90,6 +90,10 @@ def parse_changes(table: pd.DataFrame) -> pd.DataFrame:
     )  # first column holds the effective date when the header is unnamed
     added_col = pick(("added", "ticker"), ("added", "symbol"))
     removed_col = pick(("removed", "ticker"), ("removed", "symbol"))
+    try:
+        removed_name_col: str | None = pick(("removed", "security"), ("removed", "name"))
+    except ValueError:
+        removed_name_col = None
 
     def clean(value: object) -> str | None:
         if value is None or (not isinstance(value, str) and pd.isna(value)):
@@ -106,6 +110,9 @@ def parse_changes(table: pd.DataFrame) -> pd.DataFrame:
             ),
             "added": df[added_col].map(clean),
             "removed": df[removed_col].map(clean),
+            "removed_name": (
+                df[removed_name_col].astype(str).str.strip() if removed_name_col else None
+            ),
         }
     )
     return out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)

@@ -43,6 +43,12 @@ def main() -> None:
     result.rebalances.to_csv(run_dir / "rebalances.csv", index=False)
 
     print(json.dumps(result.summary, indent=2))
+    bias = result.summary.get("estimated_survivorship_bias_cagr")
+    if bias is not None:
+        print(
+            f"\nEstimated residual survivorship bias: {bias:+.2%} per year "
+            "(equal-weight universe CAGR minus RSP CAGR; RSP charges ~0.20%/yr)"
+        )
     print(f"\nArtefacts written to {run_dir}")
     if args.source == "synthetic":
         print("Synthetic data: results say nothing about real-world performance.")

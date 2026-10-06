@@ -99,3 +99,37 @@ def test_levels_use_traded_price_not_dividend_adjusted(market, as_of):
     pd.testing.assert_series_equal(snap["earnings_yield"], base["earnings_yield"])
     # Constant scaling leaves returns-based features unchanged.
     np.testing.assert_allclose(snap["mom_12_1"], base["mom_12_1"])
+
+
+def test_delisted_holdings_are_liquidated(market, config):
+    """A held name whose quotes stop for good is sold at its last price."""
+    first = run_backtest(market, config, "2023-06-01", "2024-12-31")
+    held = first.holdings[first.holdings["date"] == pd.Timestamp("2024-03-28")]
+    victim = held.sort_values("weight").iloc[-1]["security_id"]
+
+    delisted = _copy(market)
+    gone = delisted.close.index > "2024-04-15"
+    for frame in (delisted.close, delisted.open, delisted.volume):
+        frame.loc[gone, victim] = np.nan
+    result = run_backtest(delisted, config, "2023-06-01", "2024-12-31")
+    sells = result.trades[result.trades["side"] == "DELISTED_SELL"]
+    assert victim in set(sells["security_id"])
+    later = result.holdings[result.holdings["date"] > pd.Timestamp("2024-05-01")]
+    assert victim not in set(later["security_id"])
+    assert np.isfinite(result.equity).all()
+    assert result.summary["delisted_liquidations"] >= 1
+
+
+def test_no_signals_keeps_portfolio_instead_of_liquidating(market, config):
+    calls = {"n": 0}
+
+    def flaky(as_of, cfg):
+        calls["n"] += 1
+        signals = generate_signals(build_feature_snapshot(market, as_of), cfg)
+        return signals.iloc[0:0] if calls["n"] == 3 else signals  # 3rd rebalance: data gap
+
+    result = run_backtest(market, config, "2024-01-01", "2024-12-31", signal_provider=flaky)
+    skipped = result.rebalances[result.rebalances.get("skipped").notna()]
+    assert len(skipped) == 1
+    day_after = result.holdings[result.holdings["date"] > skipped.iloc[0]["signal_date"]]
+    assert len(day_after) > 0  # still invested

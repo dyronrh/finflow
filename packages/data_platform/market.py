@@ -31,6 +31,8 @@ class MarketData:
     filters and dollar volume. ``close`` is used when absent (synthetic data)."""
     benchmark_close: pd.Series | None = None
     """Optional external benchmark (e.g. SPY total-return proxy)."""
+    equal_weight_reference: pd.Series | None = None
+    """Optional survivorship-free equal-weight index proxy (e.g. RSP)."""
     metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
