@@ -38,6 +38,8 @@ class YahooPrices:
     failed: list[str]
     price_close: pd.DataFrame | None = None
     """Split-adjusted (not dividend-adjusted) close."""
+    high: pd.DataFrame | None = None
+    low: pd.DataFrame | None = None
 
 
 def to_yahoo_symbol(ticker: str) -> str:
@@ -208,6 +210,12 @@ def assemble_prices(data: dict[str, pd.DataFrame], symbols: list[str]) -> YahooP
         open=wide("Open").reindex(index=close.index, columns=close.columns) * factor,
         close=close,
         price_close=price_close,
+        high=wide("High").reindex(index=close.index, columns=close.columns) * factor
+        if "High" in next(iter(data.values()), pd.DataFrame()).columns
+        else None,
+        low=wide("Low").reindex(index=close.index, columns=close.columns) * factor
+        if "Low" in next(iter(data.values()), pd.DataFrame()).columns
+        else None,
         volume=wide("Volume").reindex(index=close.index, columns=close.columns),
         splits=splits,
         failed=sorted(set(symbols) - set(close.columns)),

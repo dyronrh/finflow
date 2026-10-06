@@ -13,3 +13,5 @@ data/local_dev_only/*
 !data/local_dev_only/.gitkeep
 .DS_Store
 models/registry/
+apps/web/node_modules/
+apps/web/dist/

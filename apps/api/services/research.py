@@ -13,7 +13,7 @@ import pandas as pd
 
 from backtesting.engine import benchmark_returns_as_of
 from data_platform.features import build_feature_snapshot
-from data_platform.synthetic import SyntheticMarket, generate_synthetic_market
+from data_platform.synthetic import SyntheticMarket
 from quant_core.config import FACTOR_FAMILIES, StrategyConfig, default_strategy_config
 from quant_core.execution.costs import TransactionCostModel
 from quant_core.portfolio.construction import build_target_weights, portfolio_sector_exposure
@@ -37,8 +37,8 @@ class ResearchService:
     def __init__(self, market: SyntheticMarket, config: StrategyConfig) -> None:
         self.market = market
         self.config = config
-        self._signals = lru_cache(maxsize=64)(self._compute_signals)
-        self._features = lru_cache(maxsize=64)(self._compute_features)
+        self._signals = lru_cache(maxsize=256)(self._compute_signals)
+        self._features = lru_cache(maxsize=256)(self._compute_features)
 
     # --- snapshots -------------------------------------------------------
     def resolve_as_of(self, as_of: object | None) -> pd.Timestamp:
@@ -298,4 +298,25 @@ def _ret(close: pd.Series, n: int) -> float | None:
 
 @lru_cache(maxsize=1)
 def get_research_service() -> ResearchService:
-    return ResearchService(generate_synthetic_market(), default_strategy_config())
+    """Data source and strategy from the environment:
+
+    * ``FINFLOW_DATA_SOURCE``: ``synthetic`` (default) or ``real`` (cached
+      Yahoo Finance + SEC EDGAR data, see ``make fetch-data``);
+    * ``FINFLOW_STRATEGY``: path to a strategy YAML (default v0.1.0).
+    """
+    import os
+
+    from quant_core.config import load_strategy_config
+
+    source = os.environ.get("FINFLOW_DATA_SOURCE", "synthetic")
+    strategy = os.environ.get("FINFLOW_STRATEGY")
+    config = load_strategy_config(strategy) if strategy else default_strategy_config()
+    if source == "real":
+        from data_platform.real_market import load_market
+
+        market = load_market()
+    else:
+        from data_platform.synthetic import default_synthetic_market
+
+        market = default_synthetic_market()
+    return ResearchService(market, config)

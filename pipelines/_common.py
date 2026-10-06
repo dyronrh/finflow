@@ -11,7 +11,10 @@ sys.path.insert(0, str(ROOT / "packages"))
 
 from data_platform.market import MarketData  # noqa: E402
 from data_platform.real_market import DEFAULT_CACHE, load_market  # noqa: E402
-from data_platform.synthetic import generate_synthetic_market  # noqa: E402
+from data_platform.synthetic import (  # noqa: E402
+    default_synthetic_market,
+    generate_synthetic_market,
+)
 
 
 def add_source_args(parser) -> None:
@@ -27,6 +30,9 @@ def add_source_args(parser) -> None:
 
 def load_source(args, start: str, end: str) -> MarketData:
     if args.source == "synthetic":
+        if args.seed == 42 and start >= "2016-01-01":
+            # Same market as the API/dashboard, so their numbers agree.
+            return default_synthetic_market(end)
         first = f"{int(start[:4]) - 2}-01-01"
         return generate_synthetic_market(start=first, end=end, seed=args.seed)
     market = load_market(args.cache)

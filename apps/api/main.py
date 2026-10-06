@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.api.schemas.models import (
     PortfolioRiskRequest,
@@ -18,6 +21,7 @@ from apps.api.schemas.models import (
     RebalanceProposalRequest,
     SecurityAnalysis,
 )
+from apps.api.services.dashboard import DashboardService, get_dashboard_service
 from apps.api.services.research import (
     AsOfOutOfRange,
     ResearchService,
@@ -37,6 +41,15 @@ app = FastAPI(
 )
 
 Service = Annotated[ResearchService, Depends(get_research_service)]
+Dashboard = Annotated[DashboardService, Depends(get_dashboard_service)]
+
+
+def _finite(value) -> float | None:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value == value and abs(value) != float("inf") else None
 
 
 def _as_of(service: ResearchService, as_of: date | None):
@@ -75,6 +88,9 @@ def rankings(
             factor_scores=factor_scores(row),
             risk_flags=list(row["risk_flags"]),
             explanation=list(row["explanation"]),
+            price=_finite(row.get("price")),
+            market_cap_usd=_finite(row.get("market_cap_usd")),
+            volatility_63d=_finite(row.get("volatility_63d")),
         )
         for _, row in selected.head(limit).iterrows()
     ]
@@ -131,3 +147,69 @@ def portfolio_risk(
         alerts=service.alerts(weights, resolved),
         **risk,
     )
+
+
+# ----------------------------------------------------------------------------- dashboard
+@app.get("/v1/overview")
+def overview(dashboard: Dashboard) -> dict:
+    return dashboard.overview()
+
+
+@app.get("/v1/securities")
+def securities(dashboard: Dashboard) -> list[dict]:
+    return dashboard.securities()
+
+
+@app.get("/v1/securities/{security_id}/prices")
+def prices(security_id: str, dashboard: Dashboard, start: date | None = None) -> dict:
+    try:
+        return dashboard.prices(security_id, str(start) if start else None)
+    except UnknownSecurity as exc:
+        raise HTTPException(status_code=404, detail=f"unknown security: {exc}") from exc
+
+
+@app.get("/v1/securities/{security_id}/score-history")
+def score_history(
+    security_id: str, dashboard: Dashboard, months: Annotated[int, Query(ge=1, le=60)] = 24
+) -> dict:
+    try:
+        return dashboard.score_history(security_id, months)
+    except UnknownSecurity as exc:
+        raise HTTPException(status_code=404, detail=f"unknown security: {exc}") from exc
+
+
+@app.get("/v1/portfolio/model")
+def model_portfolio(dashboard: Dashboard) -> dict:
+    return dashboard.model_portfolio()
+
+
+@app.get("/v1/backtest")
+def backtest(dashboard: Dashboard, years: Annotated[int, Query(ge=1, le=15)] = 3) -> dict:
+    return dashboard.backtest(years)
+
+
+@app.get("/v1/paper")
+def paper(dashboard: Dashboard) -> dict:
+    """Read-only: approvals and execution stay in the CLI until the API has auth."""
+    return dashboard.paper()
+
+
+@app.get("/v1/paper/proposals/{proposal_id}")
+def paper_proposal(proposal_id: str, dashboard: Dashboard) -> dict:
+    try:
+        return dashboard.paper_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown proposal {proposal_id}") from exc
+
+
+# Serve the built web app (apps/web/dist) at / when present: one process for UI + API.
+_WEB_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
+if _WEB_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=_WEB_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str) -> FileResponse:
+        candidate = _WEB_DIST / path
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_WEB_DIST / "index.html")

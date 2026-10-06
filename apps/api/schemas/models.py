@@ -25,6 +25,9 @@ class RankingItem(BaseModel):
     factor_scores: FactorScores
     risk_flags: list[str]
     explanation: list[str]
+    price: float | None = None
+    market_cap_usd: float | None = None
+    volatility_63d: float | None = None
 
 
 class RankingsResponse(BaseModel):

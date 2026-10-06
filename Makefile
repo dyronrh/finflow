@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile web-install web-dev web-build app app-real
 
 install:
 	uv sync
@@ -59,3 +59,18 @@ paper-propose:
 paper-reconcile:
 	uv run --extra real-data python pipelines/paper_trade.py sync && \
 	uv run --extra real-data python pipelines/paper_trade.py reconcile
+
+web-install:
+	cd apps/web && npm ci
+
+web-dev:  ## UI with hot reload on :5173 (run `make api` in another terminal)
+	cd apps/web && npm run dev
+
+web-build:
+	cd apps/web && npm run build
+
+app: web-build  ## UI + API on http://localhost:8000 (synthetic data)
+	uv run uvicorn apps.api.main:app --port 8000
+
+app-real: web-build  ## UI + API on real cached data
+	FINFLOW_DATA_SOURCE=real uv run --extra real-data uvicorn apps.api.main:app --port 8000

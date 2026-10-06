@@ -29,6 +29,23 @@ SECTORS = (
 SyntheticMarket = MarketData
 
 
+SYNTHETIC_START = "2014-01-01"
+
+
+def default_synthetic_market(end: str | None = None) -> MarketData:
+    """The synthetic market shared by the API, the dashboard and the CLIs.
+
+    The generator's random draws depend on the date range, so every consumer
+    must use the same range to see the same prices (e.g. paper-trading
+    positions valued by the dashboard).
+    """
+    import datetime as _dt
+
+    return generate_synthetic_market(
+        start=SYNTHETIC_START, end=end or _dt.date.today().isoformat(), seed=42
+    )
+
+
 def generate_synthetic_market(
     n_securities: int = 150,
     start: str = "2019-01-01",
@@ -79,6 +96,12 @@ def generate_synthetic_market(
         }
     )
 
+    # Intraday range from a separate stream so existing series stay unchanged.
+    range_rng = np.random.default_rng(seed + 10_007)
+    wick = np.abs(range_rng.normal(0, 0.006, (2, n_days, n_securities)))
+    high = np.maximum(open_, close) * np.exp(wick[0])
+    low = np.minimum(open_, close) * np.exp(-wick[1])
+
     fundamentals = _fundamentals(rng, ids, dates, quality, growth, target_mcap)
     estimates = _estimates(rng, ids, dates, quality, revision)
 
@@ -86,6 +109,8 @@ def generate_synthetic_market(
         securities=securities,
         open=pd.DataFrame(open_, index=dates, columns=ids),
         close=pd.DataFrame(close, index=dates, columns=ids),
+        high=pd.DataFrame(high, index=dates, columns=ids),
+        low=pd.DataFrame(low, index=dates, columns=ids),
         volume=pd.DataFrame(volume, index=dates, columns=ids),
         fundamentals=fundamentals,
         estimates=estimates,

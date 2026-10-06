@@ -52,6 +52,26 @@ python pipelines/paper_trade.py reconcile
 python pipelines/paper_trade.py kill --reason "..."     # parada de emergencia
 ```
 
+**Dashboard web** (`apps/web/`, React + TypeScript + Vite):
+
+- **Gráficos de velas:** TradingView Lightweight Charts, con volumen en panel separado, SMA 20/50/200, escala logarítmica, rangos rápidos, leyenda OHLC que sigue al cursor y marcadores de los cambios de decisión del modelo.
+- **Pantallas:**
+  - resumen;
+  - rankings filtrables y ordenables;
+  - ficha por acción (score, factores contra la mediana del sector, explicación e historial);
+  - cartera modelo con riesgo ex-ante y límites;
+  - backtest (capital, drawdown y métricas contra benchmark);
+  - paper trading (cuenta, posiciones, propuestas y auditoría).
+- **Experiencia:** búsqueda con atajo `/` y teclado, tema oscuro/claro y diseño responsive.
+- **Solo lectura:** aprobar y ejecutar órdenes sigue en el CLI hasta que la API tenga autenticación.
+
+```bash
+make web-install          # una vez
+make app                  # UI + API en http://localhost:8000 (datos sintéticos)
+make app-real             # con datos reales (tras make fetch-data)
+make api & make web-dev   # desarrollo con recarga en http://localhost:5173
+```
+
 **Datos.** Hay dos fuentes:
 
 - `synthetic`: mercado sintético determinista para desarrollo y tests. Sus resultados no dicen nada sobre desempeño real.
@@ -102,7 +122,7 @@ El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como 
 - **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A). Bancos y aseguradoras quedan con cobertura parcial.
 - **Cambio de configuración:** el walk-forward no cobra el coste de cambiar de configuración entre ventanas.
 
-Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), dashboard (Streamlit/Next.js), PostgreSQL/DuckDB/MinIO + Docker Compose, orquestación diaria (Prefect), reportes HTML, optimización convexa (CVXPY) y una señal con ventaja demostrada fuera de muestra antes de cualquier uso con capital.
+Pendiente: fuente PIT de estimaciones de analistas, precios de empresas deslistadas (proveedor de pago), autenticación y roles en la API, PostgreSQL/DuckDB/MinIO + Docker Compose, orquestación diaria (Prefect), reportes HTML, optimización convexa (CVXPY) y una señal con ventaja demostrada fuera de muestra antes de cualquier uso con capital.
 
 ---
 
