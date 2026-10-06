@@ -21,6 +21,10 @@ real-data = [
     "pyarrow>=15.0",
 ]
 
+ml = [
+    "scikit-learn>=1.4",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -40,6 +44,8 @@ packages = [
     "packages/quant_core",
     "packages/data_platform",
     "packages/backtesting",
+    "packages/ml",
+    "packages/paper_trading",
 ]
 
 [tool.pytest.ini_options]
@@ -59,7 +65,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["quant_core", "data_platform", "backtesting", "apps", "_common"]
+known-first-party = ["quant_core", "data_platform", "backtesting", "ml", "paper_trading", "apps", "_common"]
 
 [tool.mypy]
 python_version = "3.11"

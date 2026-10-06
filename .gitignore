@@ -12,3 +12,4 @@ reports/
 data/local_dev_only/*
 !data/local_dev_only/.gitkeep
 .DS_Store
+models/registry/

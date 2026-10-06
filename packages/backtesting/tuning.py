@@ -281,6 +281,17 @@ def _stats(returns: pd.Series, benchmark: pd.Series) -> dict[str, float]:
     return s
 
 
+def _git_commit_safe() -> str:
+    from backtesting.engine import _git_commit
+
+    return _git_commit()
+
+
+def window_stats(returns: pd.Series, benchmark: pd.Series) -> dict[str, float]:
+    """Performance of daily ``returns`` and information ratio vs ``benchmark``."""
+    return _stats(returns, benchmark)
+
+
 def tune_strategy(
     market: MarketData,
     base: StrategyConfig,

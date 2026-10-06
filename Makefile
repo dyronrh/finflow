@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models
 
 install:
 	uv sync
@@ -40,3 +40,12 @@ tune-real-weights:
 
 score-real:
 	uv run --extra real-data python pipelines/score_universe.py --source real --tickers $(TICKERS) --top 10
+
+train-ml:
+	uv run --extra ml python pipelines/train_ml.py --source synthetic
+
+train-ml-real:
+	uv run --extra real-data --extra ml python pipelines/train_ml.py --source real
+
+models:
+	uv run python pipelines/model_registry.py list

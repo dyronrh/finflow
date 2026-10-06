@@ -13,7 +13,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --extra real-data
+      - run: uv sync --extra real-data --extra ml
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
