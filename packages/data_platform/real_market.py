@@ -178,11 +178,20 @@ def fetch_real_market(
         len(set(tickers) - current_ids),
     )
 
-    prices = yahoo.download_prices(tickers, start, end)
-    spy = yahoo.download_benchmark(benchmark, start, end)
+    yahoo_cache = raw / "yahoo"
+    spy = yahoo.download_benchmark(benchmark, start, end, cache_dir=yahoo_cache)
+    prices = yahoo.download_prices(tickers, start, end, cache_dir=yahoo_cache)
+    missing_current = (current_ids & set(tickers)) - set(prices.close.columns)
+    if len(missing_current) > 0.05 * max(len(current_ids & set(tickers)), 1):
+        raise yahoo.YahooDownloadError(
+            f"{len(missing_current)} current S&P 500 members got no prices from Yahoo "
+            f"(e.g. {sorted(missing_current)[:5]}). Current members always trade, so this is "
+            "a network or rate-limit problem. Re-run `make fetch-data` later: prices already "
+            "downloaded are cached and will not be fetched again."
+        )
     try:
-        rsp = yahoo.download_benchmark(equal_weight_reference, start, end)
-    except RuntimeError as exc:
+        rsp = yahoo.download_benchmark(equal_weight_reference, start, end, cache_dir=yahoo_cache)
+    except yahoo.YahooDownloadError as exc:
         log.warning("equal-weight reference unavailable: %s", exc)
         rsp = None
 

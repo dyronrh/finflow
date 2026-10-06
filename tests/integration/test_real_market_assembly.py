@@ -128,7 +128,7 @@ def _stub_sources(monkeypatch, history_ok=True):
     monkeypatch.setattr(
         real_market.yahoo,
         "download_prices",
-        lambda t, s, e: yahoo.YahooPrices(
+        lambda t, s, e, **kw: yahoo.YahooPrices(
             open=close.shift(1).fillna(close)[[c for c in close.columns if c in t]],
             close=close[[c for c in close.columns if c in t]],
             volume=close[[c for c in close.columns if c in t]] * 0 + 1e6,
@@ -141,7 +141,7 @@ def _stub_sources(monkeypatch, history_ok=True):
     )
     bench = {"SPY": close.mean(axis=1), "RSP": close.mean(axis=1) * 0.99}
     monkeypatch.setattr(
-        real_market.yahoo, "download_benchmark", lambda sym, *a: bench[sym].rename(sym)
+        real_market.yahoo, "download_benchmark", lambda sym, *a, **kw: bench[sym].rename(sym)
     )
 
     class FakeSec:

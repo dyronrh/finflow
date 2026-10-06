@@ -15,6 +15,7 @@ from datetime import date
 
 from _common import DEFAULT_CACHE, sec_user_agent
 from data_platform.real_market import fetch_real_market
+from data_platform.sources.yahoo import YahooDownloadError
 
 
 def main() -> None:
@@ -28,9 +29,12 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    market = fetch_real_market(
-        args.start, args.end, sec_user_agent(), args.cache, max_securities=args.max_securities
-    )
+    try:
+        market = fetch_real_market(
+            args.start, args.end, sec_user_agent(), args.cache, max_securities=args.max_securities
+        )
+    except YahooDownloadError as exc:
+        raise SystemExit(f"\nERROR: {exc}") from None
     f = market.fundamentals
     print(f"data_version: {market.data_version}")
     print(f"securities with prices + SEC facts: {len(market.securities)}")

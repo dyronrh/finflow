@@ -16,12 +16,16 @@ and no publication dates, which would break point-in-time discipline.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
-FIELDS = ("Open", "Close", "Adj Close", "Volume")
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,54 +45,156 @@ def to_yahoo_symbol(ticker: str) -> str:
     return ticker.strip().upper().replace(".", "-")
 
 
-def download_prices(
-    tickers: list[str],
-    start: str,
-    end: str,
-    chunk_size: int = 100,
-    pause_seconds: float = 1.0,
-) -> YahooPrices:
+class YahooDownloadError(RuntimeError):
+    """Yahoo could not be reached reliably (network, DNS, rate limit)."""
+
+
+Downloader = Callable[[list[str], str, str], dict[str, pd.DataFrame]]
+
+
+def _yf_downloader(threads: int, cache_dir: Path | None) -> Downloader:
     import yfinance as yf  # optional dependency: uv sync --extra real-data
 
-    symbols = sorted({to_yahoo_symbol(t) for t in tickers})
-    frames: dict[str, list[pd.DataFrame]] = {f: [] for f in (*FIELDS, "Stock Splits")}
-    for i in range(0, len(symbols), chunk_size):
-        chunk = symbols[i : i + chunk_size]
+    if cache_dir is not None:
+        # yfinance keeps a SQLite timezone cache; the default location can be
+        # unwritable or locked under concurrency ("unable to open database file").
+        tz_dir = Path(cache_dir) / "yfinance_tz"
+        tz_dir.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(Exception):
+            yf.set_tz_cache_location(str(tz_dir))
+
+    def download(chunk: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
         raw = yf.download(
             chunk,
             start=start,
             end=end,
             auto_adjust=False,
             actions=True,
-            group_by="column",
-            threads=True,
+            group_by="ticker",
+            threads=threads,
             progress=False,
         )
-        if raw is None or raw.empty:
+        return split_by_symbol(raw, chunk)
+
+    return download
+
+
+def split_by_symbol(raw: pd.DataFrame | None, chunk: list[str]) -> dict[str, pd.DataFrame]:
+    """One OHLCV frame per symbol that actually returned prices."""
+    out: dict[str, pd.DataFrame] = {}
+    if raw is None or raw.empty:
+        return out
+    for sym in chunk:
+        frame = None
+        if isinstance(raw.columns, pd.MultiIndex):
+            for level in range(raw.columns.nlevels):
+                if sym in raw.columns.get_level_values(level):
+                    frame = raw.xs(sym, axis=1, level=level)
+                    break
+        elif len(chunk) == 1:
+            frame = raw
+        if frame is None or "Close" not in frame.columns or frame["Close"].dropna().empty:
             continue
-        for field in frames:
-            if field in raw.columns.get_level_values(0):
-                frames[field].append(_as_wide(raw[field], chunk))
-        time.sleep(pause_seconds)
+        frame = frame.dropna(how="all").copy()
+        frame.index = pd.DatetimeIndex(frame.index).tz_localize(None).normalize()
+        out[sym] = frame
+    return out
 
-    def combine(field: str) -> pd.DataFrame:
-        parts = frames[field]
-        if not parts:
+
+def download_prices(
+    tickers: list[str],
+    start: str,
+    end: str,
+    cache_dir: Path | None = None,
+    chunk_size: int = 20,
+    threads: int = 4,
+    pause_seconds: float = 1.0,
+    max_rounds: int = 4,
+    downloader: Downloader | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> YahooPrices:
+    """Download in small chunks with limited concurrency, retrying failures.
+
+    Successful symbols are cached one file per symbol (``cache_dir``), so an
+    interrupted run resumes where it stopped. A symbol is only reported as
+    failed after several rounds; it is cached as missing only when other
+    symbols in the same chunk succeeded (a real "no data", not an outage).
+    """
+    fetch = downloader or _yf_downloader(threads, cache_dir)
+    sleep = sleep or time.sleep
+    symbols = sorted({to_yahoo_symbol(t) for t in tickers})
+    store = Path(cache_dir) / "prices" / f"{start}_{end}" if cache_dir else None
+    if store:
+        store.mkdir(parents=True, exist_ok=True)
+
+    data: dict[str, pd.DataFrame] = {}
+    known_missing: set[str] = set()
+    for sym in symbols:
+        if store and (store / f"{sym}.parquet").exists():
+            data[sym] = pd.read_parquet(store / f"{sym}.parquet")
+        elif store and (store / f"{sym}.missing").exists():
+            known_missing.add(sym)
+
+    pending = [s for s in symbols if s not in data and s not in known_missing]
+    # Symbols that failed while others in the same request succeeded: evidence
+    # the connection worked, so the miss is real (delisted, unknown ticker).
+    failed_while_healthy: set[str] = set()
+    for round_ in range(max_rounds):
+        if not pending:
+            break
+        if round_:
+            wait = pause_seconds * 15 * 2 ** (round_ - 1)
+            log.warning(
+                "Yahoo: retrying %d symbols in %.0fs (round %d/%d)",
+                len(pending),
+                wait,
+                round_ + 1,
+                max_rounds,
+            )
+            sleep(wait)
+        still_missing: list[str] = []
+        for i in range(0, len(pending), chunk_size):
+            chunk = pending[i : i + chunk_size]
+            try:
+                got = fetch(chunk, start, end)
+            except Exception as exc:  # network errors surface as exceptions too
+                log.warning("Yahoo chunk failed (%s)", exc)
+                got = {}
+            for sym, frame in got.items():
+                data[sym] = frame
+                if store:
+                    frame.to_parquet(store / f"{sym}.parquet")
+            missing = [s for s in chunk if s not in got]
+            if got:
+                failed_while_healthy.update(missing)
+            still_missing.extend(missing)
+            sleep(pause_seconds)
+        pending = still_missing
+        log.info("Yahoo: %d/%d symbols with prices", len(data), len(symbols))
+
+    if store:
+        for sym in set(pending) & failed_while_healthy:
+            (store / f"{sym}.missing").touch()
+
+    return assemble_prices(data, symbols)
+
+
+def assemble_prices(data: dict[str, pd.DataFrame], symbols: list[str]) -> YahooPrices:
+    def wide(field: str) -> pd.DataFrame:
+        cols = {s: f[field] for s, f in data.items() if field in f.columns}
+        if not cols:
             return pd.DataFrame()
-        wide = pd.concat(parts, axis=1)
-        wide.index = pd.DatetimeIndex(wide.index).tz_localize(None).normalize()
-        return wide.sort_index()
+        return pd.DataFrame(cols).sort_index()
 
-    price_close = combine("Close").dropna(axis=1, how="all")
-    adj_close = combine("Adj Close").reindex(columns=price_close.columns)
+    price_close = wide("Close").dropna(axis=1, how="all")
+    adj_close = wide("Adj Close").reindex(columns=price_close.columns)
     if adj_close.empty:
         adj_close = price_close
     adj_close = adj_close.fillna(price_close)
     # Total-return adjustment factor, applied to the open as well.
     factor = (adj_close / price_close).where(price_close > 0)
     close = adj_close
-    failed = sorted(set(symbols) - set(close.columns))
-    splits_wide = combine("Stock Splits")
+    splits_wide = wide("Stock Splits").reindex(columns=close.columns)
     splits = (
         splits_wide.stack()
         .rename("ratio")
@@ -99,27 +205,26 @@ def download_prices(
     )
     splits = splits[splits["ratio"] > 0][["security_id", "date", "ratio"]].reset_index(drop=True)
     return YahooPrices(
-        open=combine("Open").reindex(columns=close.columns) * factor,
+        open=wide("Open").reindex(index=close.index, columns=close.columns) * factor,
         close=close,
         price_close=price_close,
-        volume=combine("Volume").reindex(columns=close.columns),
+        volume=wide("Volume").reindex(index=close.index, columns=close.columns),
         splits=splits,
-        failed=failed,
+        failed=sorted(set(symbols) - set(close.columns)),
     )
 
 
-def download_benchmark(symbol: str, start: str, end: str) -> pd.Series:
-    prices = download_prices([symbol], start, end)
+def download_benchmark(
+    symbol: str, start: str, end: str, cache_dir: Path | None = None
+) -> pd.Series:
+    prices = download_prices([symbol], start, end, cache_dir=cache_dir)
     if prices.close.empty:
-        raise RuntimeError(f"could not download benchmark {symbol}")
+        raise YahooDownloadError(
+            f"could not download {symbol} from Yahoo Finance. This is a network/rate-limit "
+            "problem, not missing data: check your connection and re-run `make fetch-data` "
+            "(prices already downloaded are cached)."
+        )
     return prices.close.iloc[:, 0].rename(symbol)
-
-
-def _as_wide(frame: pd.DataFrame | pd.Series, chunk: list[str]) -> pd.DataFrame:
-    # yfinance returns a Series-like single column when one symbol is requested.
-    if isinstance(frame, pd.Series):
-        return frame.to_frame(chunk[0])
-    return frame
 
 
 def split_factor_after(splits: pd.DataFrame, security_id: str, after: pd.Timestamp) -> float:
