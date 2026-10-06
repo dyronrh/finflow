@@ -112,6 +112,7 @@ make fetch-data          # descarga y cachea en data/local_dev_only/real/ (~30�
 make backtest-real       # backtest v0.1.0 sobre histórico real
 make tune-real           # ajuste walk-forward + holdout + IC de factores
 make tune-real-weights   # igual, pero probando perfiles de pesos de factores
+make research-real       # investigación de factores candidatos (ver abajo)
 ```
 
 **Protocolo de ajuste** (`packages/backtesting/tuning.py`, `pipelines/tune_strategy.py`):
@@ -123,6 +124,25 @@ make tune-real-weights   # igual, pero probando perfiles de pesos de factores
 5. **Diagnóstico:** IC de Spearman por familia, por variable individual y por año, más el spread de quintiles, para separar "los factores no predicen" de "la cartera no aprovecha la señal".
 
 El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como nueva versión requiere revisión humana (§8.3).
+
+**Investigación de factores** (`packages/research/factors.py`, `pipelines/research_factors.py`, `make research` / `make research-real`):
+
+Evalúa ~28 factores candidatos antes de que entren a la estrategia: los actuales y nuevos (sales yield, gross profitability, accruals, crecimiento de activos, estabilidad de márgenes y beneficios, distancia al máximo de 52 semanas, reversión de 1 mes, baja volatilidad, beta, tamaño, emisión neta de acciones). Cada uno lleva una hipótesis con signo fijado **antes** de mirar los datos.
+
+1. **Universo:** a cada fin de mes, el universo elegible de la estrategia en esa fecha.
+2. **Puntuación:** percentil winsorizado dentro del sector, igual que el scorer de producción.
+3. **Retornos futuros:** desde la apertura de `t+1` hasta 1, 3 y 6 meses. Una acción que deja de cotizar se valora a su último precio, así los perdedores deslistados no desaparecen.
+4. **Estadísticos:** IC de Spearman con t de Newey-West (los horizontes de 3 y 6 meses se solapan), IC IR, % de meses positivos, spread Q5−Q1, exceso del quintil superior, monotonicidad, rotación del quintil superior, cobertura, estabilidad por mitades y por año, y correlación media entre factores (para detectar redundancia).
+5. **Pruebas múltiples:** con ~28 candidatos, alguno parecerá bueno por azar. Se calculan q-values de Benjamini-Hochberg (FDR 10 % por defecto) y se marca además el umbral estricto |t| > 3.
+6. **Holdout** (últimos 3 años): se reporta aparte y nunca se usa para seleccionar.
+
+Veredictos:
+- `ACCEPT`: significativo tras BH, signo correcto, y en el holdout IC > 0 con t ≥ 1.
+- `FAILS_HOLDOUT`: significativo en investigación, pero no se sostiene en el holdout.
+- `INVERTED`: predice, pero al revés de la hipótesis. No se invierte en silencio.
+- `NOT_SIGNIFICANT`: no supera la corrección por pruebas múltiples.
+
+Se informa también un compuesto equal-weight de los factores que pasan en investigación, evaluado una vez en el holdout. Un `ACCEPT` es un candidato para una nueva versión de estrategia; aún necesita backtest y revisión humana. Salida en `reports/factors_<fuente>_<fecha>/` (`verdicts.csv`, `research.csv`, `holdout.csv`, `correlations.csv`, `ic_by_year.csv`, `report.json`).
 
 **Sesgo de supervivencia: qué se corrige y qué se mide**
 

@@ -43,6 +43,17 @@ def build_feature_snapshot(market: MarketData, as_of: pd.Timestamp) -> pd.DataFr
     out["mom_6m"] = _lagged_return(close, 0, 6 * TRADING_DAYS_MONTH)
     out["mom_3m"] = _lagged_return(close, 0, 3 * TRADING_DAYS_MONTH)
 
+    # Research candidates (not used by v0.1/v0.2 scoring; see packages/research).
+    year = close.tail(TRADING_DAYS_YEAR + 1)
+    year_ret = year.pct_change(fill_method=None).iloc[1:]
+    enough = year_ret.notna().mean() >= 0.8
+    out["volatility_252d"] = (year_ret.std() * np.sqrt(TRADING_DAYS_YEAR)).where(enough)
+    out["beta_252d"] = _beta(year_ret, _benchmark_returns(market, year_ret.index)).where(enough)
+    out["ret_1m"] = _lagged_return(close, 0, TRADING_DAYS_MONTH)
+    out["high_52w_ratio"] = (close.iloc[-1] / year.max()).where(enough)
+    out["log_market_cap"] = np.log(out["market_cap_usd"].where(out["market_cap_usd"] > 0))
+    out["net_issuance_1y"] = _net_issuance(market, as_of, out.index)
+
     members = market.members_at(as_of)
     if members is not None:
         out["in_universe"] = out.index.isin(list(members))
@@ -54,6 +65,38 @@ def build_feature_snapshot(market: MarketData, as_of: pd.Timestamp) -> pd.DataFr
     out.insert(0, "as_of_date", decision_date)
     out["data_version"] = market.data_version
     return out
+
+
+def _benchmark_returns(market: MarketData, index: pd.Index) -> pd.Series:
+    if market.benchmark_close is not None:
+        return market.benchmark_close.reindex(index).pct_change(fill_method=None)
+    window = market.close.reindex(index)
+    return window.pct_change(fill_method=None).mean(axis=1)
+
+
+def _beta(returns: pd.DataFrame, benchmark: pd.Series) -> pd.Series:
+    b = benchmark.reindex(returns.index)
+    ok = b.notna()
+    r = returns[ok].fillna(0.0)
+    b = b[ok]
+    if len(b) < 20 or b.var() == 0:
+        return pd.Series(np.nan, index=returns.columns)
+    rc = r - r.mean()
+    bc = b - b.mean()
+    return (rc.mul(bc, axis=0).sum() / (bc**2).sum()).reindex(returns.columns)
+
+
+def _net_issuance(market: MarketData, as_of: pd.Timestamp, index: pd.Index) -> pd.Series:
+    """Change in share count over ~1 year (buybacks < 0 < issuance), PIT."""
+    if market.shares is None or market.shares.empty:
+        return pd.Series(np.nan, index=index)
+    shares = market.shares.dropna(subset=["shares_outstanding"])
+    now = latest_as_of(shares, as_of).set_index("security_id")["shares_outstanding"]
+    then = latest_as_of(shares, as_of - pd.Timedelta(days=365)).set_index("security_id")[
+        "shares_outstanding"
+    ]
+    change = now / then.reindex(now.index).where(lambda v: v > 0) - 1.0
+    return change.reindex(index)
 
 
 def _shares_as_of(market: MarketData, as_of: pd.Timestamp, index: pd.Index) -> pd.Series:
@@ -116,6 +159,22 @@ def _fundamental_features(
     feats["revenue_growth"] = (latest["revenue"] / prev_rev - 1.0).reindex(feats.index)
     prev_ni = prev["net_income"].where(prev["net_income"] > 0)
     feats["eps_growth"] = (latest["net_income"] / prev_ni - 1.0).reindex(feats.index)
+    # Research candidates.
+    positive_ic = invested.where(invested > 0)
+    feats["sales_yield"] = ttm["revenue"] / mcap
+    feats["gross_profitability"] = ttm["gross_profit"] / positive_ic
+    feats["accruals"] = (ttm["net_income"] - ttm["free_cash_flow"]) / positive_ic
+    prev_ic = prev["invested_capital"].where(prev["invested_capital"] > 0)
+    feats["asset_growth"] = (latest["invested_capital"] / prev_ic - 1.0).reindex(feats.index)
+    two_years = visible[age <= 650].copy()
+    rev = two_years["revenue"].where(two_years["revenue"] > 0)
+    two_years["gm_q"] = two_years["gross_profit"] / rev
+    two_years["nm_q"] = two_years["net_income"] / rev
+    grouped = two_years.groupby("security_id")
+    n_q = grouped.size()
+    feats["gross_margin_volatility"] = grouped["gm_q"].std().where(n_q >= 6).reindex(feats.index)
+    feats["earnings_volatility"] = grouped["nm_q"].std().where(n_q >= 6).reindex(feats.index)
+
     feats["fundamentals_available_at"] = latest["available_at"].reindex(feats.index)
     return feats.replace([np.inf, -np.inf], np.nan)
 

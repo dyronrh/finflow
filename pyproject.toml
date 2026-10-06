@@ -46,6 +46,7 @@ packages = [
     "packages/backtesting",
     "packages/ml",
     "packages/paper_trading",
+    "packages/research",
 ]
 
 [tool.pytest.ini_options]

@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile web-install web-dev web-build app app-real static static-real deploy-vercel
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real research research-real train-ml train-ml-real models paper-status paper-propose paper-reconcile web-install web-dev web-build app app-real static static-real deploy-vercel
 
 install:
 	uv sync
@@ -37,6 +37,12 @@ tune-real:
 
 tune-real-weights:
 	uv run --extra real-data python pipelines/tune_strategy.py --source real --grid configs/tuning/factor_weights.yaml
+
+research:  ## candidate-factor study on synthetic data
+	uv run python pipelines/research_factors.py --source synthetic
+
+research-real:  ## candidate-factor study on real cached data (run make fetch-data first)
+	uv run --extra real-data python pipelines/research_factors.py --source real
 
 score-real:
 	uv run --extra real-data python pipelines/score_universe.py --source real --tickers $(TICKERS) --top 10
