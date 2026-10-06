@@ -11,31 +11,59 @@ Plataforma cuantitativa para analizar acciones, generar rankings multifactoriale
 
 ## 0. Estado actual del repositorio y quickstart
 
-Implementado (núcleo del MVP, Sprints 3–5 sobre datos sintéticos):
+Implementado (núcleo del MVP, Sprints 2–5):
 
 | Módulo | Contenido |
 |---|---|
 | `configs/strategies/v0.1.0.yaml` | Pesos del composite, umbrales de señales, límites de cartera y costes, validados con Pydantic (`quant_core/config.py`) |
-| `packages/data_platform/` | Helpers point-in-time (`available_at <= as_of`), mercado sintético determinista, snapshots de features PIT, data contracts |
+| `packages/data_platform/` | Helpers point-in-time (`available_at <= as_of`), adaptadores Yahoo Finance / SEC EDGAR / S&P 500, mercado sintético, snapshots de features PIT, data contracts |
 | `packages/quant_core/factors/` | Winsorización + percentil sectorial, scores por familia 0–100, composite con cobertura mínima |
 | `packages/quant_core/signals/` | Filtros de elegibilidad, etiquetas `STRONG_LONG`…`AVOID`, explicaciones legibles |
 | `packages/quant_core/portfolio/` | Selección con histéresis, equal weight / inverse volatility, límites por acción y sector, bandas de no-operación, límite de turnover |
 | `packages/quant_core/execution/` | Modelo de costes (comisión + half-spread + slippage) |
-| `packages/backtesting/` | Backtester event-driven: señal al cierre `t`, fill a la apertura `t+1`, costes, benchmark equal-weight, métricas, metadata reproducible |
+| `packages/backtesting/` | Backtester event-driven: señal al cierre `t`, fill a la apertura `t+1`, costes, benchmarks (equal-weight y SPY), métricas, metadata reproducible; ajuste walk-forward con holdout e IC de factores |
 | `apps/api/` | FastAPI: `GET /v1/rankings`, `GET /v1/securities/{id}/analysis`, `POST /v1/portfolios/{id}/rebalance/proposal` (solo propuesta, `PENDING_APPROVAL`) |
 | `tests/` | Normalización, scoring, reglas de señales, leakage point-in-time, límites de cartera, no same-bar execution, determinismo, API |
 
-**Importante:** todavía no hay proveedor de datos conectado. La API y los backtests corren sobre `data_platform.synthetic`, un mercado sintético con la misma forma que los datos reales (OHLCV diario, filings trimestrales con rezago de publicación, snapshots semanales de estimaciones). Sus resultados no dicen nada sobre desempeño real.
+**Datos.** Hay dos fuentes:
+
+- `synthetic`: mercado sintético determinista para desarrollo y tests. Sus resultados no dicen nada sobre desempeño real.
+- `real`: histórico de mercado real armado con fuentes gratuitas (`packages/data_platform/real_market.py`):
+
+| Dato | Fuente | Point-in-time |
+|---|---|---|
+| Precios diarios (ajustados por splits y dividendos) y SPY | Yahoo Finance (`yfinance`) | Sí: se usa el cierre de `t` y se ejecuta en la apertura de `t+1` |
+| Fundamentales trimestrales y acciones en circulación | SEC EDGAR XBRL (`companyfacts`) | Sí: `available_at` = fecha de filing; se conserva el **primer** valor publicado, nunca reexpresiones |
+| Universo y sector | S&P 500 en Wikipedia (miembros actuales + historial de altas/bajas) | Aproximado (ver limitaciones) |
+| Estimaciones de analistas | — | No hay fuente gratuita PIT: el factor *revisions* queda desactivado y su peso se redistribuye |
+
+Yahoo no se usa para fundamentales porque solo entrega los últimos trimestres y sin fecha de publicación.
 
 ```bash
-uv sync                 # instala dependencias
-make test               # pytest
-make lint               # ruff
-make api                # http://localhost:8000/docs
-make backtest           # escribe reports/<version>_<config_hash>/
+uv sync --extra real-data
+export SEC_USER_AGENT="finflow research tu-email@ejemplo.com"   # exigido por la SEC
+make fetch-data          # descarga y cachea en data/local_dev_only/real/ (~30–60 min la primera vez)
+make backtest-real       # backtest v0.1.0 sobre histórico real
+make tune-real           # ajuste walk-forward + holdout + IC de factores
 ```
 
-Pendiente: ingesta real (bronze/silver/gold), PostgreSQL/DuckDB/MinIO, Docker Compose, frontend Next.js, risk engine (VaR/CVaR, beta, alertas), walk-forward, optimización convexa, paper trading.
+**Protocolo de ajuste** (`packages/backtesting/tuning.py`, `pipelines/tune_strategy.py`):
+
+1. **Holdout:** los últimos 3 años (por defecto) nunca se usan para elegir parámetros y se miran una sola vez.
+2. **Grilla:** cada configuración se corre una vez. La grilla por defecto cubre el límite de turnover, el umbral de LONG y el tipo de ponderación; con `--grid archivo.yaml` se define otra.
+3. **Walk-forward:** en cada ventana de 3 meses se elige la mejor configuración con los 5 años previos y se mide su resultado fuera de muestra. Esto estima cuánto vale el *proceso de ajuste*, no la mejor corrida.
+4. **Validación final:** la mejor configuración pre-holdout se compara con v0.1.0 y el benchmark en el holdout.
+5. **Diagnóstico:** IC de Spearman por familia de factores y spread de quintiles, para separar "los factores no predicen" de "la cartera no aprovecha la señal".
+
+El resultado es un `candidate.yaml`, no una estrategia aprobada: adoptarlo como nueva versión requiere revisión humana (§8.3).
+
+**Limitaciones del histórico gratuito:**
+- **Sesgo de supervivencia residual:** las empresas que salieron del S&P 500 y ya no tienen historial en Yahoo quedan fuera, lo que favorece al backtest.
+- **Sectores:** se usa la clasificación GICS actual, y el código SIC para las empresas retiradas.
+- **Conceptos XBRL:** son aproximaciones (EBITDA = resultado operativo + D&A; deuda = deuda de largo plazo + corto plazo). Bancos y aseguradoras quedan con cobertura parcial.
+- **Cambio de configuración:** el walk-forward no cobra el coste de cambiar de configuración entre ventanas.
+
+Pendiente: fuente PIT de estimaciones de analistas, universo PIT completo (proveedor con delistings), PostgreSQL/DuckDB/MinIO, Docker Compose, frontend Next.js, risk engine (VaR/CVaR, beta, alertas), walk-forward, optimización convexa, paper trading.
 
 ---
 

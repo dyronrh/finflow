@@ -1,7 +1,10 @@
-.PHONY: install test lint format typecheck api backtest
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real
 
 install:
 	uv sync
+
+install-real:
+	uv sync --extra real-data
 
 test:
 	uv run pytest
@@ -21,4 +24,13 @@ api:
 	uv run uvicorn apps.api.main:app --reload
 
 backtest:
-	uv run python pipelines/run_backtest.py
+	uv run python pipelines/run_backtest.py --source synthetic
+
+fetch-data:
+	uv run --extra real-data python pipelines/fetch_real_data.py
+
+backtest-real:
+	uv run --extra real-data python pipelines/run_backtest.py --source real
+
+tune-real:
+	uv run --extra real-data python pipelines/tune_strategy.py --source real

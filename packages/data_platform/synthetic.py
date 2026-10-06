@@ -8,10 +8,10 @@ backtest on it says nothing about real-world performance.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 import numpy as np
 import pandas as pd
+
+from data_platform.market import MarketData
 
 SECTORS = (
     "information_technology",
@@ -25,34 +25,8 @@ SECTORS = (
 )
 
 
-@dataclass
-class SyntheticMarket:
-    securities: pd.DataFrame
-    """security_id, ticker, sector_id, industry_id, shares_outstanding."""
-    open: pd.DataFrame
-    """Wide frame: index=date, columns=security_id."""
-    close: pd.DataFrame
-    volume: pd.DataFrame
-    fundamentals: pd.DataFrame
-    """Quarterly filings with event_time (period end), available_at, ingested_at."""
-    estimates: pd.DataFrame
-    """Weekly FY1 EPS estimate snapshots with available_at."""
-    seed: int
-    data_version: str = field(default="")
-
-    def __post_init__(self) -> None:
-        if not self.data_version:
-            last = self.close.index[-1].strftime("%Y_%m_%d")
-            self.data_version = f"synthetic_us_equities_seed{self.seed}_{last}"
-
-    @property
-    def dates(self) -> pd.DatetimeIndex:
-        return pd.DatetimeIndex(self.close.index)
-
-    def trading_date_on_or_before(self, as_of: pd.Timestamp) -> pd.Timestamp | None:
-        dates = self.dates
-        pos = dates.searchsorted(pd.Timestamp(as_of), side="right") - 1
-        return None if pos < 0 else dates[pos]
+# Backwards-compatible name: the synthetic generator returns a plain MarketData.
+SyntheticMarket = MarketData
 
 
 def generate_synthetic_market(
