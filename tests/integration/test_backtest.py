@@ -49,3 +49,18 @@ def test_rebalance_dates_are_month_ends(market):
     assert len(dates) == len({(d.year, d.month) for d in market.dates})
     biweekly = rebalance_dates(market.dates, "biweekly")
     assert len(biweekly) == 2 * len(dates)
+
+
+def test_risk_limits_enforced_in_v020(market):
+    from quant_core.config import load_strategy_config
+
+    v1 = load_strategy_config("configs/strategies/v0.1.0.yaml")
+    v2 = load_strategy_config("configs/strategies/v0.2.0.yaml")
+    assert not v1.risk.enforce and v2.risk.enforce
+    r1 = run_backtest(market, v1, "2023-06-01", "2024-12-31")
+    r2 = run_backtest(market, v2, "2023-06-01", "2024-12-31")
+    # v0.1.0 reports breaches but does not change weights; v0.2.0 removes them.
+    assert (r1.rebalances["risk_actions"].fillna("") == "").all()
+    assert r1.summary["rebalances_with_risk_breaches"] > 0
+    assert r2.summary["rebalances_with_risk_breaches"] == 0
+    assert {"ex_ante_volatility", "ex_ante_var_95", "ex_ante_beta"} <= set(r2.rebalances.columns)

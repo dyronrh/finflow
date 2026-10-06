@@ -102,4 +102,23 @@ class RebalanceProposal(BaseModel):
     orders: list[ProposedOrder]
     sector_exposure_before: dict[str, float]
     sector_exposure_after: dict[str, float]
+    risk_before: dict[str, object]
+    risk_after: dict[str, object]
+    risk_actions: list[str]
+    alerts: list[dict[str, object]]
     note: str
+
+
+class PortfolioRiskRequest(BaseModel):
+    as_of: date | None = None
+    holdings: dict[str, float] = Field(..., description="Weights by security_id.")
+
+
+class PortfolioRiskResponse(BaseModel):
+    as_of_date: date
+    strategy_version: str
+    risk: dict[str, object]
+    breaches: list[dict[str, object]]
+    sector_exposure: dict[str, float] = Field(default_factory=dict)
+    risk_contributions: dict[str, float] = Field(default_factory=dict)
+    alerts: list[dict[str, object]]

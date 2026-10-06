@@ -6,9 +6,12 @@ import uuid
 from datetime import date
 from typing import Annotated
 
+import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 from apps.api.schemas.models import (
+    PortfolioRiskRequest,
+    PortfolioRiskResponse,
     RankingItem,
     RankingsResponse,
     RebalanceProposal,
@@ -109,3 +112,22 @@ def rebalance_proposal(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     rebalance_id = f"rb_{resolved:%Y_%m_%d}_{uuid.uuid4().hex[:8]}"
     return RebalanceProposal(rebalance_id=rebalance_id, portfolio_id=portfolio_id, **proposal)
+
+
+@app.post("/v1/portfolios/{portfolio_id}/risk", response_model=PortfolioRiskResponse)
+def portfolio_risk(
+    portfolio_id: str, request: PortfolioRiskRequest, service: Service
+) -> PortfolioRiskResponse:
+    resolved = _as_of(service, request.as_of)
+    known = set(service.market.securities["security_id"])
+    unknown = sorted(set(request.holdings) - known)
+    if unknown:
+        raise HTTPException(status_code=404, detail=f"unknown security: {', '.join(unknown)}")
+    weights = pd.Series(request.holdings, dtype=float)
+    risk = service.portfolio_risk(weights, resolved)
+    return PortfolioRiskResponse(
+        as_of_date=resolved.date(),
+        strategy_version=service.config.strategy_version,
+        alerts=service.alerts(weights, resolved),
+        **risk,
+    )

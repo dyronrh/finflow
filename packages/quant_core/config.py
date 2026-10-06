@@ -73,6 +73,21 @@ class PortfolioConfig(_Frozen):
         return self
 
 
+class RiskConfig(_Frozen):
+    """Portfolio risk limits (README §10.3, §15). ``enforce`` makes them active
+    constraints on target weights; otherwise they only raise alerts."""
+
+    enforce: bool = False
+    lookback_days: int = Field(252, ge=60)
+    max_industry_weight: float = Field(0.15, gt=0.0, le=1.0)
+    max_single_name_risk_contribution: float = Field(0.10, gt=0.0, le=1.0)
+    max_portfolio_volatility: float = Field(0.25, gt=0.0)
+    max_var_95_daily: float = Field(0.03, gt=0.0)
+    max_beta: float = Field(1.30, gt=0.0)
+    min_gross_exposure: float = Field(0.80, ge=0.0, le=1.0)
+    """De-risking by moving to cash never goes below this exposure."""
+
+
 class CostConfig(_Frozen):
     commission_bps: float = Field(1.0, ge=0.0)
     half_spread_bps: float = Field(2.0, ge=0.0)
@@ -95,6 +110,7 @@ class StrategyConfig(_Frozen):
     signals: SignalThresholds = SignalThresholds()
     portfolio: PortfolioConfig = PortfolioConfig()
     costs: CostConfig = CostConfig()
+    risk: RiskConfig = RiskConfig()
 
     @model_validator(mode="after")
     def _check_weights(self) -> StrategyConfig:

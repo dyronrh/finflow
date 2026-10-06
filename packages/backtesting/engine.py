@@ -27,6 +27,9 @@ from quant_core.config import StrategyConfig
 from quant_core.execution.costs import TransactionCostModel
 from quant_core.portfolio.construction import build_target_weights
 from quant_core.portfolio.rebalance import plan_rebalance
+from quant_core.risk.enforce import enforce_risk_limits
+from quant_core.risk.metrics import compute_risk
+from quant_core.risk.model import trailing_returns
 from quant_core.signals.rules import generate_signals
 
 # Trading days without any quote before a held name is treated as delisted and
@@ -167,6 +170,7 @@ def run_backtest(
                 )
                 continue
             target = build_target_weights(signals, pcfg, set(current.index))
+            target, risk_log = _apply_risk(market, config, signals, target, date)
             plan = plan_rebalance(current, target, pcfg.trade_band, pcfg.max_turnover_per_rebalance)
             pending = (date, plan.final_weights)
             rebalance_log.append(
@@ -175,6 +179,7 @@ def run_backtest(
                     "n_targets": len(target),
                     "planned_turnover": plan.turnover,
                     "turnover_capped": plan.turnover_capped,
+                    **risk_log,
                 }
             )
 
@@ -216,6 +221,13 @@ def run_backtest(
     if len(trades_df):
         summary["delisted_liquidations"] = float((trades_df["side"] == "DELISTED_SELL").sum())
     summary["unfilled_orders"] = float(len(unfilled))
+    rb = result.rebalances
+    if "risk_breaches" in rb:
+        summary["rebalances_with_risk_breaches"] = float(
+            (rb["risk_breaches"].fillna("") != "").sum()
+        )
+        summary["avg_ex_ante_volatility"] = float(rb["ex_ante_volatility"].mean())
+        summary["avg_gross_exposure"] = float(rb["gross_exposure"].mean())
     summary["total_costs_usd"] = float(trades_df["cost_usd"].sum()) if len(trades_df) else 0.0
     summary["avg_turnover_per_rebalance"] = (
         float(result.rebalances["planned_turnover"].iloc[1:].mean())
@@ -227,6 +239,59 @@ def run_backtest(
     )
     result.summary = summary
     return result
+
+
+def benchmark_returns_as_of(
+    market: MarketData, as_of: pd.Timestamp, lookback_days: int
+) -> pd.Series:
+    """Daily benchmark returns up to ``as_of`` (SPY if available, else the
+    equal-weight average of the dataset)."""
+    if market.benchmark_close is not None:
+        series = market.benchmark_close.loc[:as_of].tail(lookback_days + 1)
+        return series.pct_change().iloc[1:]
+    window = market.close.loc[:as_of].tail(lookback_days + 1)
+    return window.pct_change(fill_method=None).mean(axis=1).iloc[1:]
+
+
+def _apply_risk(
+    market: MarketData,
+    config: StrategyConfig,
+    signals: pd.DataFrame,
+    target: pd.Series,
+    as_of: pd.Timestamp,
+) -> tuple[pd.Series, dict[str, object]]:
+    """Ex-ante risk of the target; enforce limits when the strategy says so."""
+    if target.empty:
+        return target, {}
+    rcfg = config.risk
+    meta = signals.set_index("security_id")
+    sectors = meta["sector_id"]
+    industries = meta["industry_id"] if "industry_id" in meta else meta["sector_id"]
+    returns = trailing_returns(market.close, as_of, list(target.index), rcfg.lookback_days)
+    bench = benchmark_returns_as_of(market, as_of, rcfg.lookback_days)
+    actions: list[str] = []
+    if rcfg.enforce:
+        target, actions = enforce_risk_limits(
+            target,
+            returns,
+            rcfg,
+            sectors,
+            industries,
+            config.portfolio.max_position_weight,
+            config.portfolio.max_sector_weight,
+            bench,
+        )
+    report = compute_risk(
+        target, returns, rcfg, sectors, industries, bench, config.portfolio.max_sector_weight
+    )
+    return target, {
+        "ex_ante_volatility": report.volatility_annual,
+        "ex_ante_var_95": report.var_95_daily,
+        "ex_ante_beta": report.beta,
+        "gross_exposure": report.gross_exposure,
+        "risk_breaches": ",".join(b.code for b in report.breaches),
+        "risk_actions": ",".join(actions),
+    }
 
 
 def _equal_weight_benchmark(

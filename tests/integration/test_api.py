@@ -57,3 +57,24 @@ def test_rebalance_proposal_rejects_bad_holdings(client):
         json={"holdings": {"SEC0001": 0.8, "SEC0002": 0.8}},
     )
     assert r.status_code == 422
+
+
+def test_proposal_includes_risk_before_after_and_alerts(client):
+    body = client.post(
+        "/v1/portfolios/demo/rebalance/proposal",
+        json={"holdings": {"SEC0001": 0.5, "SEC0002": 0.5}},
+    ).json()
+    assert body["risk_before"]["volatility_annual"] > 0
+    assert "var_95_daily" in body["risk_after"]
+    assert isinstance(body["alerts"], list) and isinstance(body["risk_actions"], list)
+    # a two-stock book breaches the risk-contribution budget
+    assert any(a["code"] == "RISK_CONTRIBUTION" for a in body["alerts"])
+
+
+def test_portfolio_risk_endpoint(client):
+    r = client.post("/v1/portfolios/demo/risk", json={"holdings": {"SEC0001": 0.6, "SEC0002": 0.4}})
+    body = r.json()
+    assert r.status_code == 200
+    assert body["risk"]["gross_exposure"] == pytest.approx(1.0)
+    assert sum(body["risk_contributions"].values()) == pytest.approx(1.0, abs=1e-4)
+    assert client.post("/v1/portfolios/demo/risk", json={"holdings": {"X": 1}}).status_code == 404

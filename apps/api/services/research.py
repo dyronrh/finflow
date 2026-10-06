@@ -11,12 +11,17 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
+from backtesting.engine import benchmark_returns_as_of
 from data_platform.features import build_feature_snapshot
 from data_platform.synthetic import SyntheticMarket, generate_synthetic_market
 from quant_core.config import FACTOR_FAMILIES, StrategyConfig, default_strategy_config
 from quant_core.execution.costs import TransactionCostModel
 from quant_core.portfolio.construction import build_target_weights, portfolio_sector_exposure
 from quant_core.portfolio.rebalance import plan_rebalance
+from quant_core.risk.alerts import Alert, risk_alerts, signal_alerts
+from quant_core.risk.enforce import enforce_risk_limits
+from quant_core.risk.metrics import compute_risk
+from quant_core.risk.model import trailing_returns
 from quant_core.signals.rules import apply_eligibility, generate_signals
 
 
@@ -156,6 +161,7 @@ class ResearchService:
         pcfg = self.config.portfolio
         signals = self.signals(as_of)
         target = build_target_weights(signals, pcfg, set(current.index))
+        target, risk_actions = self._enforce_risk(target, as_of)
         plan = plan_rebalance(current, target, pcfg.trade_band, pcfg.max_turnover_per_rebalance)
         costs = TransactionCostModel.from_config(self.config.costs)
 
@@ -198,11 +204,81 @@ class ResearchService:
             "sector_exposure_after": portfolio_sector_exposure(
                 plan.final_weights, sectors
             ).to_dict(),
+            "risk_before": self.portfolio_risk(current, as_of)["risk"],
+            "risk_after": self.portfolio_risk(plan.final_weights, as_of)["risk"],
+            "risk_actions": risk_actions,
+            "alerts": self.alerts(current, as_of),
             "note": (
                 "Propuesta únicamente: no se envían órdenes. "
                 "La ejecución requiere aprobación humana."
             ),
         }
+
+    # --- risk ----------------------------------------------------------------
+    def _risk_inputs(self, names: list[str], as_of: pd.Timestamp):
+        rcfg = self.config.risk
+        meta = self.market.securities.set_index("security_id")
+        returns = trailing_returns(self.market.close, as_of, names, rcfg.lookback_days)
+        bench = benchmark_returns_as_of(self.market, as_of, rcfg.lookback_days)
+        industries = meta["industry_id"] if "industry_id" in meta else meta["sector_id"]
+        return returns, bench, meta["sector_id"], industries
+
+    def _enforce_risk(self, target: pd.Series, as_of: pd.Timestamp) -> tuple[pd.Series, list[str]]:
+        if target.empty or not self.config.risk.enforce:
+            return target, []
+        returns, bench, sectors, industries = self._risk_inputs(list(target.index), as_of)
+        return enforce_risk_limits(
+            target,
+            returns,
+            self.config.risk,
+            sectors,
+            industries,
+            self.config.portfolio.max_position_weight,
+            self.config.portfolio.max_sector_weight,
+            bench,
+        )
+
+    def portfolio_risk(self, weights: pd.Series, as_of: pd.Timestamp) -> dict[str, object]:
+        weights = weights[weights > 0]
+        if weights.empty:
+            return {"risk": {"gross_exposure": 0.0}, "breaches": []}
+        returns, bench, sectors, industries = self._risk_inputs(list(weights.index), as_of)
+        report = compute_risk(
+            weights,
+            returns,
+            self.config.risk,
+            sectors,
+            industries,
+            bench,
+            self.config.portfolio.max_sector_weight,
+        )
+        return {
+            "risk": report.summary(),
+            "breaches": [b.__dict__ for b in report.breaches],
+            "sector_exposure": report.sector_exposure,
+            "risk_contributions": report.risk_contributions,
+        }
+
+    def alerts(self, weights: pd.Series, as_of: pd.Timestamp) -> list[dict[str, object]]:
+        """Risk breaches of the current book plus signal changes over the last month."""
+        held = set(weights[weights > 0].index)
+        out: list[Alert] = []
+        if held:
+            returns, bench, sectors, industries = self._risk_inputs(sorted(held), as_of)
+            report = compute_risk(
+                weights[weights > 0],
+                returns,
+                self.config.risk,
+                sectors,
+                industries,
+                bench,
+                self.config.portfolio.max_sector_weight,
+            )
+            out.extend(risk_alerts(report))
+        previous = self._shift(as_of, 21)
+        if previous is not None:
+            out.extend(signal_alerts(self.signals(previous), self.signals(as_of), held))
+        return [a.to_dict() for a in out]
 
 
 def factor_scores(row: pd.Series) -> dict[str, float | None]:
