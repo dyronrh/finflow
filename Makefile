@@ -1,4 +1,4 @@
-.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile web-install web-dev web-build app app-real
+.PHONY: install install-real test lint format typecheck api backtest fetch-data backtest-real tune-real tune-real-weights score-real train-ml train-ml-real models paper-status paper-propose paper-reconcile web-install web-dev web-build app app-real static static-real deploy-vercel
 
 install:
 	uv sync
@@ -74,3 +74,14 @@ app: web-build  ## UI + API on http://localhost:8000 (synthetic data)
 
 app-real: web-build  ## UI + API on real cached data
 	FINFLOW_DATA_SOURCE=real uv run --extra real-data uvicorn apps.api.main:app --port 8000
+
+static:  ## static site with synthetic data in apps/web/dist (deployable to Vercel)
+	cd apps/web && npm run build:static
+	uv run python pipelines/export_static.py --source synthetic
+
+static-real:  ## static site with real cached data (run make fetch-data first)
+	cd apps/web && npm run build:static
+	uv run --extra real-data python pipelines/export_static.py --source real
+
+deploy-vercel:  ## upload apps/web/dist to Vercel (first time: log in and create the project)
+	npx vercel@latest deploy apps/web/dist --prod

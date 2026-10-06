@@ -72,6 +72,23 @@ make app-real             # con datos reales (tras make fetch-data)
 make api & make web-dev   # desarrollo con recarga en http://localhost:5173
 ```
 
+**Publicar gratis en Vercel (sitio estático)**
+
+El dashboard es de solo lectura, así que se publica como sitio 100% estático. `pipelines/export_static.py` genera en tu equipo una instantánea JSON de todas las vistas, llamando a los mismos endpoints de la API. Vercel solo sirve archivos: no hay servidor Python, ni límites de tiempo, ni API expuesta.
+
+```bash
+make static            # instantánea con datos sintéticos → apps/web/dist
+make static-real       # o con tus datos reales (tras make fetch-data)
+make deploy-vercel     # sube apps/web/dist; la primera vez pide login y crear el proyecto
+```
+
+Para actualizar los datos, vuelve a correr `make static-real` y `make deploy-vercel`.
+
+- **Paper trading:** no se publica salvo con `--include-paper`.
+- **Indexación:** el sitio lleva `noindex`.
+- **Plan Hobby:** es gratuito solo para uso personal y no comercial.
+- **Datos reales:** contienen precios de Yahoo Finance, cuyos términos no permiten redistribuirlos. Comparte la URL solo para tu uso personal, o publica la versión sintética.
+
 **Datos.** Hay dos fuentes:
 
 - `synthetic`: mercado sintético determinista para desarrollo y tests. Sus resultados no dicen nada sobre desempeño real.

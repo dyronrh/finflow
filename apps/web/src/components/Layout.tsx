@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, STATIC_MODE } from "../lib/api";
 import { fmt, sectorLabel } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { Icon } from "./ui";
@@ -113,6 +113,7 @@ function SearchBox() {
 export function Layout() {
   const { theme, toggle } = useTheme();
   const { data } = useQuery({ queryKey: ["overview"], queryFn: api.overview, staleTime: 60_000 });
+  const meta = useQuery({ queryKey: ["meta"], queryFn: api.meta, staleTime: Infinity, enabled: STATIC_MODE });
   const synthetic = data?.data_source !== "real";
   return (
     <div className="app">
@@ -148,6 +149,11 @@ export function Layout() {
               </span>
               <span className="faint num hide-mobile">al {fmt.date(data.as_of_date)}</span>
               <span className="faint hide-mobile">· {data.strategy_version}</span>
+              {meta.data && (
+                <span className="faint hide-mobile" title="Sitio estático: los datos se regeneran con pipelines/export_static.py">
+                  · instantánea del {fmt.datetime(meta.data.generated_at)}
+                </span>
+              )}
             </div>
           )}
           <button className="icon-btn" onClick={toggle} aria-label="Cambiar tema" title="Cambiar tema">

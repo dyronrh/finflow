@@ -183,15 +183,61 @@ async function get<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Two data modes:
+ * - live (default): the FastAPI backend (`make app`, `make api` + `make web-dev`);
+ * - static (`vite build --mode static`): pre-generated JSON under /data, produced by
+ *   `pipelines/export_static.py`, for serverless hosting such as Vercel.
+ */
+export const STATIC_MODE = import.meta.env.VITE_STATIC_DATA === "1";
+
+const enc = encodeURIComponent;
+const route = (live: string, file: string) => (STATIC_MODE ? `/data/${file}` : live);
+
+/** Static snapshots store candles column-wise to halve their size. */
+interface ColumnarCandles {
+  time: string[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  volume: number[];
+}
+
+export interface SnapshotMeta {
+  generated_at: string;
+  data_source: string;
+  data_version: string;
+  strategy_version: string;
+  price_history_years: number;
+}
+
 export const api = {
-  overview: () => get<Overview>("/v1/overview"),
-  rankings: (limit = 500) => get<Rankings>(`/v1/rankings?limit=${limit}`),
-  securities: () => get<SecurityListItem[]>("/v1/securities"),
-  analysis: (id: string) => get<SecurityAnalysis>(`/v1/securities/${encodeURIComponent(id)}/analysis`),
-  prices: (id: string) => get<{ candles: Candle[] }>(`/v1/securities/${encodeURIComponent(id)}/prices`),
+  meta: () => (STATIC_MODE ? get<SnapshotMeta>("/data/meta.json") : Promise.resolve(null)),
+  overview: () => get<Overview>(route("/v1/overview", "overview.json")),
+  rankings: (limit = 500) => get<Rankings>(route(`/v1/rankings?limit=${limit}`, "rankings.json")),
+  securities: () => get<SecurityListItem[]>(route("/v1/securities", "securities.json")),
+  analysis: (id: string) =>
+    get<SecurityAnalysis>(route(`/v1/securities/${enc(id)}/analysis`, `securities/${enc(id)}/analysis.json`)),
+  prices: async (id: string): Promise<{ candles: Candle[] }> => {
+    if (!STATIC_MODE) return get<{ candles: Candle[] }>(`/v1/securities/${enc(id)}/prices`);
+    const c = await get<ColumnarCandles>(`/data/securities/${enc(id)}/prices.json`);
+    return {
+      candles: c.time.map((time, i) => ({
+        time,
+        open: c.open[i],
+        high: c.high[i],
+        low: c.low[i],
+        close: c.close[i],
+        volume: c.volume[i],
+      })),
+    };
+  },
   scoreHistory: (id: string, months = 24) =>
-    get<{ points: ScorePoint[] }>(`/v1/securities/${encodeURIComponent(id)}/score-history?months=${months}`),
-  modelPortfolio: () => get<ModelPortfolio>("/v1/portfolio/model"),
-  backtest: (years: number) => get<Backtest>(`/v1/backtest?years=${years}`),
-  paper: () => get<Paper>("/v1/paper"),
+    get<{ points: ScorePoint[] }>(
+      route(`/v1/securities/${enc(id)}/score-history?months=${months}`, `securities/${enc(id)}/history.json`),
+    ),
+  modelPortfolio: () => get<ModelPortfolio>(route("/v1/portfolio/model", "portfolio.json")),
+  backtest: (years: number) => get<Backtest>(route(`/v1/backtest?years=${years}`, `backtest-${years}.json`)),
+  paper: () => get<Paper>(route("/v1/paper", "paper.json")),
 };

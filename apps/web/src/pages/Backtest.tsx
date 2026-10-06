@@ -2,8 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { LineChart, type LineSpec } from "../charts/LineChart";
 import { Card, ErrorBox, Icon, Segmented, Skeleton, Stat } from "../components/ui";
-import { api } from "../lib/api";
+import { api, STATIC_MODE } from "../lib/api";
 import { fmt } from "../lib/format";
+
+// Horizons pre-computed by pipelines/export_static.py.
+const STATIC_YEARS = [1, 3, 5, 10];
 
 const ROWS: { key: string; label: string; format: (v: number | null) => string }[] = [
   { key: "cagr", label: "CAGR", format: (v) => fmt.pct(v) },
@@ -44,7 +47,7 @@ export function Backtest() {
           <p>Event-driven: señal al cierre de t, ejecución a la apertura de t+1, con costes, turnover y límites de la estrategia.</p>
         </div>
         <Segmented
-          options={[1, 3, 5, 10].map((y) => ({ value: y, label: `${y} ${y === 1 ? "año" : "años"}` }))}
+          options={(STATIC_MODE ? STATIC_YEARS : [1, 3, 5, 10]).map((y) => ({ value: y, label: `${y} ${y === 1 ? "año" : "años"}` }))}
           value={years}
           onChange={setYears}
         />

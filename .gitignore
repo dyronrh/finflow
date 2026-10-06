@@ -15,3 +15,4 @@ data/local_dev_only/*
 models/registry/
 apps/web/node_modules/
 apps/web/dist/
+.vercel/

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { LineChart } from "../charts/LineChart";
 import { Card, Empty, ErrorBox, Icon, LoadingCard, Stat } from "../components/ui";
-import { api } from "../lib/api";
+import { api, STATIC_MODE } from "../lib/api";
 import { fmt } from "../lib/format";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -51,8 +51,9 @@ export function Paper() {
       <div className="banner banner-info">
         <Icon name="lock" />
         <div>
-          Aprobar y ejecutar se hace desde el CLI (<code>python pipelines/paper_trade.py</code>) hasta que la API tenga autenticación y roles. Así nadie
-          puede enviar órdenes desde el navegador sin identificarse.
+          {STATIC_MODE
+            ? "Sitio estático: esta vista es una instantánea. Las propuestas, aprobaciones y ejecuciones se hacen en tu equipo con el CLI (python pipelines/paper_trade.py)."
+            : "Aprobar y ejecutar se hace desde el CLI (python pipelines/paper_trade.py) hasta que la API tenga autenticación y roles. Así nadie puede enviar órdenes desde el navegador sin identificarse."}
         </div>
       </div>
 
